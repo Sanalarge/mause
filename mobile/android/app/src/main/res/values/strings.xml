@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Mause</string>
+    <string name="accessibility_description">Bilgisayarınızdaki fare ve klavye olaylarını bu Android cihazında uygular.</string>
+</resources>

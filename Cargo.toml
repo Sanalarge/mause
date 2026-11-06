@@ -1,0 +1,141 @@
+[package]
+name = "mause"
+version = "0.1.0"
+edition = "2024"
+description = "One keyboard and mouse for all your computers: a software KVM with clipboard, files, audio and screen sharing"
+authors = ["Muhammed Taymur", "Serdar Kayışkıran <serdarkayiskiran@gmail.com>"]
+license = "Apache-2.0"
+repository = "https://github.com/Sanalarge/mause"
+homepage = "https://github.com/Sanalarge/mause"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[dependencies]
+blake2 = "0.11.0"
+chacha20poly1305 = "0.11.0"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+eframe = "0.37.0"
+getrandom = "0.4.3"
+jpeg-decoder = { version = "0.3.2", default-features = false }
+jpeg-encoder = { version = "0.7.1", default-features = false }
+openh264 = "0.9.9"
+snow = { version = "0.10.0", default-features = false, features = ["default-resolver", "use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
+spake2 = "0.4.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { version = "0.30.13", default-features = false, features = ["x11"] }
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "screencast"] }
+async-io = "2"
+evdev = "0.13.2"
+ksni = { version = "0.3.7", features = ["blocking"] }
+libc = "0.2.191"
+pipewire = "0.10"
+wl-clipboard-rs = "0.9.5"
+x11rb = { version = "0.14.0", features = ["randr"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Console",
+    "Win32_UI_Input",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = { version = "0.24", features = ["highsierra"] }
+core-foundation = "0.10"
+
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+arboard = { version = "3.7.0", default-features = false }
+cpal = "0.18"
+tray-icon = "0.26.1"
+
+[package.metadata.deb]
+section = "utils"
+priority = "optional"
+depends = "$auto, python3, pkexec | policykit-1"
+recommends = "pulseaudio-utils, acl, pkexec | policykit-1, libxkbcommon0, libegl1, usbip | linux-tools-generic, iptables"
+extended-description = """\
+Mause lets one keyboard and mouse control several computers on the same network. \
+Move the cursor past the screen edge to switch; clipboard, files, audio, microphone \
+and screen sharing travel over an end-to-end encrypted connection."""
+maintainer-scripts = "packaging/linux/debian/"
+assets = [
+    ["packaging/linux/usb/mause-usb-helper", "usr/libexec/mause-usb-helper", "755"],
+    ["packaging/linux/usb/org.mause.usb.policy", "usr/share/polkit-1/actions/org.mause.usb.policy", "644"],
+    ["packaging/linux/usb/50-mause-usb.rules", "usr/share/polkit-1/rules.d/50-mause-usb.rules", "644"],
+    ["packaging/linux/usb/usb-access.version", "usr/share/mause/usb-access.version", "644"],
+    ["target/release/mause", "usr/bin/", "755"],
+    ["packaging/linux/mause.desktop", "usr/share/applications/", "644"],
+    ["assets/logo.svg", "usr/share/icons/hicolor/scalable/apps/mause.svg", "644"],
+    ["target/icons/48/mause.png", "usr/share/icons/hicolor/48x48/apps/", "644"],
+    ["target/icons/128/mause.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
+    ["target/icons/256/mause.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["target/icons/512/mause.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+    ["packaging/linux/60-mause.rules", "usr/lib/udev/rules.d/", "644"],
+    ["packaging/linux/mause-modules.conf", "usr/lib/modules-load.d/mause.conf", "644"],
+    ["LICENSE", "usr/share/doc/mause/LICENSE", "644"],
+    ["NOTICE", "usr/share/doc/mause/NOTICE", "644"],
+    ["THIRD_PARTY_NOTICES.md", "usr/share/doc/mause/THIRD_PARTY_NOTICES.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+license = "Apache-2.0"
+post_install_script = "packaging/linux/debian/postinst"
+assets = [
+    { source = "packaging/linux/usb/mause-usb-helper", dest = "/usr/libexec/mause-usb-helper", mode = "755" },
+    { source = "packaging/linux/usb/org.mause.usb.policy", dest = "/usr/share/polkit-1/actions/org.mause.usb.policy", mode = "644" },
+    { source = "packaging/linux/usb/50-mause-usb.rules", dest = "/usr/share/polkit-1/rules.d/50-mause-usb.rules", mode = "644" },
+    { source = "packaging/linux/usb/usb-access.version", dest = "/usr/share/mause/usb-access.version", mode = "644" },
+    { source = "target/release/mause", dest = "/usr/bin/mause", mode = "755" },
+    { source = "packaging/linux/mause.desktop", dest = "/usr/share/applications/mause.desktop", mode = "644" },
+    { source = "assets/logo.svg", dest = "/usr/share/icons/hicolor/scalable/apps/mause.svg", mode = "644" },
+    { source = "target/icons/48/mause.png", dest = "/usr/share/icons/hicolor/48x48/apps/mause.png", mode = "644" },
+    { source = "target/icons/128/mause.png", dest = "/usr/share/icons/hicolor/128x128/apps/mause.png", mode = "644" },
+    { source = "target/icons/256/mause.png", dest = "/usr/share/icons/hicolor/256x256/apps/mause.png", mode = "644" },
+    { source = "target/icons/512/mause.png", dest = "/usr/share/icons/hicolor/512x512/apps/mause.png", mode = "644" },
+    { source = "packaging/linux/60-mause.rules", dest = "/usr/lib/udev/rules.d/60-mause.rules", mode = "644" },
+    { source = "packaging/linux/mause-modules.conf", dest = "/usr/lib/modules-load.d/mause.conf", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/doc/mause/LICENSE", mode = "644" },
+    { source = "NOTICE", dest = "/usr/share/doc/mause/NOTICE", mode = "644" },
+    { source = "THIRD_PARTY_NOTICES.md", dest = "/usr/share/doc/mause/THIRD_PARTY_NOTICES.md", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+python3 = "*"
+polkit = "*"
+
+[package.metadata.generate-rpm.recommends]
+pulseaudio-utils = "*"
+acl = "*"
+polkit = "*"
+iptables = "*"
+
+[profile.dev.package.chacha20]
+opt-level = 3
+[profile.dev.package.poly1305]
+opt-level = 3
+[profile.dev.package.chacha20poly1305]
+opt-level = 3
+[profile.dev.package.universal-hash]
+opt-level = 3
+[profile.dev.package.cipher]
+opt-level = 3
+[profile.dev.package.aead]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+[profile.dev.package.digest]
+opt-level = 3
+[profile.dev.package.snow]
+opt-level = 3
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
+
+[patch.crates-io]
+eframe = { path = "vendor/eframe" }

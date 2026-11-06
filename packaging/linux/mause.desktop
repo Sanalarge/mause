@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Mause
+GenericName=Software KVM
+Comment=One keyboard and mouse for all your computers
+Comment[tr]=Tek klavye ve mouse ile birden çok bilgisayar
+Exec=mause
+Icon=mause
+Terminal=false
+Categories=Utility;
+Keywords=kvm;mouse;keyboard;share;screen;clipboard;
+StartupWMClass=mause

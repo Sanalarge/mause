@@ -1,0 +1,9 @@
+polkit.addRule(function(action, subject) {
+    if (action.id === "org.mause.usb.manage") {
+        if (action.lookup("program") === "/usr/libexec/mause-usb-helper" &&
+            subject.local && subject.active) {
+            return polkit.Result.YES;
+        }
+        return polkit.Result.NO;
+    }
+});
