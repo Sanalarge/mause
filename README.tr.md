@@ -95,7 +95,7 @@ Android imzası için depo secrets bölümünde `ANDROID_KEYSTORE_BASE64`, `ANDR
 
 ## Katkıda bulunma
 
-Mause sade bir trunk-based akış kullanır: kalıcı tek dal `main` dalıdır. Kısa ömürlü bir `feature/*`, `fix/*`, `docs/*` veya `chore/*` dalı açın, pull request oluşturun ve CI başarılı olduktan sonra squash merge yapın. Ayrıntılar için [CONTRIBUTING.md](CONTRIBUTING.md) dosyasına bakın.
+Mause sade bir trunk-based akış kullanır: kalıcı tek dal `main` dalıdır. Dışarıdan katkılar yalnızca pull request ile kabul edilir. Kısa ömürlü bir `feature/*`, `fix/*`, `docs/*` veya `chore/*` dalı açıp pull request oluşturun. Güncel değişiklik üç bakımcının tamamı tarafından onaylandığında CI başlar; CI başarılı olduktan sonra squash merge yapılır. Ayrıntılar için [CONTRIBUTING.md](CONTRIBUTING.md) dosyasına bakın.
 
 Güvenlik açıklarını herkese açık issue olarak bildirmeyin. [SECURITY.md](SECURITY.md) içindeki yolu kullanın.
 

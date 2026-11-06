@@ -51,7 +51,13 @@ Platform-specific changes should also build on the affected platform. Android ch
 
 ## Pull requests
 
+All external contributions must arrive through a pull request. Direct changes to `main` are reserved for repository recovery and administration.
+
 Explain the problem, the solution, how you tested it and any platform-specific impact. Include screenshots or a short recording for visible interface changes. Do not mix unrelated cleanup into the same pull request.
+
+The current revision must be approved by all three maintainers: `Sanalarge`, `ByTaymur` and `serdarkayiskiran`. For a maintainer-authored pull request, the author counts as that maintainer's approval and the other two maintainers must approve. Expensive CI jobs start only after this gate is complete. A new commit requires fresh approvals.
+
+Passing CI does not publish a release. A maintainer starts the release workflow manually after the approved pull request is merged.
 
 By contributing, you agree that your contribution is licensed under the Apache License 2.0.
 
