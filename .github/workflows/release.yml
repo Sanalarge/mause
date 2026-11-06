@@ -32,6 +32,9 @@ jobs:
           echo "Sürüm: $series.$patch"
 
   test:
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/ci.yml
 
   build:
