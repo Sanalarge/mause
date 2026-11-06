@@ -27,7 +27,7 @@ Mause is an open-source software KVM for controlling computers and Android devic
 | Encrypted transport | Protect paired-device traffic with end-to-end encryption. |
 | Clipboard and files | Move text and files between paired computers. |
 | Media sharing | Share audio, microphone and screens when supported by the platform. |
-| Native packaging | Install with Windows Setup, macOS app bundle, Linux packages or Android APK. |
+| Native packaging | Install desktop builds with Windows Setup, a macOS app bundle or Linux packages; build Android from source. |
 | System theme | Follow the operating system's light or dark appearance. |
 
 ## Install
@@ -52,7 +52,7 @@ The release build targets glibc 2.35 or newer and uses PipeWire. The first run m
 
 ### Android
 
-Download `mause-vX.Y.Z-android.apk`, allow installation from the selected browser or file manager, and open the APK. Enable the Mause accessibility service and input permissions when prompted. Android acts as a device controlled by the primary computer; it does not mirror the Android screen to the computer.
+Mause does not currently publish a prebuilt Android APK. Build the Android application from source with the instructions below, install the generated debug APK, then enable the Mause accessibility service and input permissions. Android acts as a device controlled by the primary computer; it does not mirror the Android screen to the computer.
 
 ## Pair devices
 
@@ -89,9 +89,9 @@ cd ..
 
 ## Releases
 
-Pull requests run formatting, desktop tests, platform checks, the Windows installer lifecycle test and an Android build. A push does not publish a release. Maintainers start the `Release` workflow manually; it creates a `vX.Y.Z` tag and publishes Windows, macOS, Linux and signed Android artifacts.
+Pull requests run formatting, desktop tests, platform checks, the Windows installer lifecycle test and an Android source build. A push does not publish a release. Maintainers start the `Release` workflow manually; it creates a `vX.Y.Z` tag and publishes Windows, macOS and Linux artifacts. Android remains source-only and is not attached to releases.
 
-Android release signing requires `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` repository secrets. Apple Developer ID and notarization secrets are optional; without them the macOS bundle uses an ad-hoc signature.
+Apple Developer ID and notarization secrets are optional; without them the macOS bundle uses an ad-hoc signature.
 
 ## Contributing
 

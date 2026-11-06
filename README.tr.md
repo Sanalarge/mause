@@ -27,7 +27,7 @@ Mause; aynı ağdaki bilgisayarları ve Android cihazları tek klavye ve fareyle
 | Şifreli taşıma | Eşleşmiş cihaz trafiğini uçtan uca şifreler. |
 | Pano ve dosyalar | Metin ve dosyaları eşleşmiş bilgisayarlar arasında taşır. |
 | Medya paylaşımı | Platform desteklediğinde ses, mikrofon ve ekran paylaşır. |
-| Yerel paketler | Windows Setup, macOS uygulaması, Linux paketi veya Android APK ile kurulur. |
+| Yerel paketler | Masaüstünde Windows Setup, macOS uygulaması veya Linux paketi kullanılır; Android kaynaktan derlenir. |
 | Sistem teması | İşletim sisteminin açık veya koyu görünümünü izler. |
 
 ## Kurulum
@@ -52,7 +52,7 @@ Release paketi glibc 2.35 veya üstünü hedefler ve PipeWire kullanır. İlk a�
 
 ### Android
 
-`mause-vX.Y.Z-android.apk` dosyasını indirin, seçtiğiniz tarayıcı veya dosya yöneticisine bilinmeyen uygulama kurma izni verin ve APK'yı açın. İstendiğinde Mause erişilebilirlik hizmetini ve giriş izinlerini etkinleştirin. Android, ana bilgisayarın klavye ve faresiyle yönetilen cihazdır; Android ekranını bilgisayara yansıtmaz.
+Mause şimdilik hazır Android APK'sı yayımlamaz. Android uygulamasını aşağıdaki adımlarla kaynak koddan derleyin, oluşan debug APK'yı kurun ve Mause erişilebilirlik hizmetiyle giriş izinlerini etkinleştirin. Android, ana bilgisayarın klavye ve faresiyle yönetilen cihazdır; Android ekranını bilgisayara yansıtmaz.
 
 ## Cihazları eşleştirme
 
@@ -89,9 +89,9 @@ cd ..
 
 ## Release süreci
 
-Pull request açıldığında biçimlendirme, masaüstü testleri, platform kontrolleri, Windows kurulum yaşam döngüsü testi ve Android derlemesi çalışır. Push işlemi release yayımlamaz. Bakımcı `Release` akışını elle başlatır; akış `vX.Y.Z` etiketi oluşturup Windows, macOS, Linux ve imzalı Android çıktılarını yayımlar.
+Pull request açıldığında biçimlendirme, masaüstü testleri, platform kontrolleri, Windows kurulum yaşam döngüsü testi ve Android kaynak derlemesi çalışır. Push işlemi release yayımlamaz. Bakımcı `Release` akışını elle başlatır; akış `vX.Y.Z` etiketi oluşturup Windows, macOS ve Linux çıktılarını yayımlar. Android kaynak olarak sunulur ve release'e APK eklenmez.
 
-Android imzası için depo secrets bölümünde `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` ve `ANDROID_KEY_PASSWORD` bulunmalıdır. Apple Developer ID ve noter secrets değerleri isteğe bağlıdır; yoksa macOS paketi geçici imzayla hazırlanır.
+Apple Developer ID ve noter secrets değerleri isteğe bağlıdır; yoksa macOS paketi geçici imzayla hazırlanır.
 
 ## Katkıda bulunma
 
