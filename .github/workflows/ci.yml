@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  pull_request:
+    types: [opened, reopened, synchronize]
   pull_request_review:
     types: [submitted, edited, dismissed]
   workflow_dispatch:
@@ -25,10 +27,10 @@ jobs:
       ready: ${{ steps.review.outputs.ready || steps.direct.outputs.ready }}
     steps:
       - id: direct
-        if: github.event_name != 'pull_request_review'
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
         run: echo "ready=true" >> "$GITHUB_OUTPUT"
       - id: review
-        if: github.event_name == 'pull_request_review'
+        if: startsWith(github.event_name, 'pull_request')
         uses: actions/github-script@v9
         with:
           script: |
@@ -69,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          ref: ${{ startsWith(github.event_name, 'pull_request') && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.99.1
@@ -89,7 +91,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          ref: ${{ startsWith(github.event_name, 'pull_request') && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libpipewire-0.3-dev
@@ -114,7 +116,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          ref: ${{ startsWith(github.event_name, 'pull_request') && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.99.1
@@ -147,7 +149,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          ref: ${{ startsWith(github.event_name, 'pull_request') && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
