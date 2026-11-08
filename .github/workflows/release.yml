@@ -217,6 +217,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      V: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -232,19 +234,36 @@ jobs:
           path: dist
       - uses: softprops/action-gh-release@v3
         with:
-          tag_name: v${{ needs.version.outputs.version }}
-          name: Mause v${{ needs.version.outputs.version }}
+          tag_name: v${{ env.V }}
+          name: Mause v${{ env.V }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: dist/*
           body: |
-            ## İndir
-            - **macOS** (Apple Silicon ve Intel): `mause-v${{ needs.version.outputs.version }}-macos-universal.zip` — açıp Mause.app'i Uygulamalar'a taşıyın.
-            - **Windows** (x64): `mause-v${{ needs.version.outputs.version }}-windows-x86_64-setup.exe` — kurulum gerekli Visual C++ çalışma zamanını ve seçilen USB sürücülerini çevrimdışı kurar. Yönetici izni gerekir; sürücüler yeniden başlatma isteyebilir.
-            - Windows ZIP paketi eski sürümlerin güncelleyicisi için geçici uyumluluk çıktısıdır; yeni kurulumlarda setup kullanın. Setup SHA256 özeti ve sabitlenmiş bağımlılık listesi aynı sürümde yer alır.
-            - **Ubuntu / Debian / Mint / Pop!_OS**: `mause-v${{ needs.version.outputs.version }}-linux-x86_64.deb` — çift tıklayın ya da `sudo apt install ./mause-v${{ needs.version.outputs.version }}-linux-x86_64.deb`
-            - **Fedora / openSUSE / RHEL**: `mause-v${{ needs.version.outputs.version }}-linux-x86_64.rpm` — `sudo dnf install ./mause-v${{ needs.version.outputs.version }}-linux-x86_64.rpm`
-            - **Diğer Linux** (Arch, Manjaro, ...): `mause-v${{ needs.version.outputs.version }}-linux-x86_64.tar.gz` — açıp `sudo ./mause/install.sh`
-            - **Android**: Hazır APK yayımlanmıyor. Android uygulamasını kaynak koddan derlemek için README içindeki adımları izleyin.
+            Mause, aynı ağdaki bilgisayarları ve Android cihazları tek klavye ve fareyle kullanmanızı sağlar.
 
-            Linux: glibc 2.35+ (Ubuntu 22.04 ve sonrası) ve PipeWire gerekir. İlk açılışta Mause klavye/mouse izni için parola ister; ardından oturumu bir kez kapatıp açın.
+            ### İndir
+
+            | Platform | Paket | Kurulum |
+            | --- | --- | --- |
+            | **Windows** · 64 bit | [Setup (.exe)](https://github.com/Sanalarge/mause/releases/download/v${{ env.V }}/mause-v${{ env.V }}-windows-x86_64-setup.exe) | Çalıştırın, yönetici izni ister |
+            | **macOS** · Apple Silicon ve Intel | [Uygulama (.zip)](https://github.com/Sanalarge/mause/releases/download/v${{ env.V }}/mause-v${{ env.V }}-macos-universal.zip) | Açın, Mause.app'i Uygulamalar'a taşıyın |
+            | **Ubuntu · Debian · Mint** | [.deb](https://github.com/Sanalarge/mause/releases/download/v${{ env.V }}/mause-v${{ env.V }}-linux-x86_64.deb) | `sudo apt install ./mause-v${{ env.V }}-linux-x86_64.deb` |
+            | **Fedora · openSUSE · RHEL** | [.rpm](https://github.com/Sanalarge/mause/releases/download/v${{ env.V }}/mause-v${{ env.V }}-linux-x86_64.rpm) | `sudo dnf install ./mause-v${{ env.V }}-linux-x86_64.rpm` |
+            | **Diğer Linux** | [.tar.gz](https://github.com/Sanalarge/mause/releases/download/v${{ env.V }}/mause-v${{ env.V }}-linux-x86_64.tar.gz) | Açın, `sudo ./mause/install.sh` çalıştırın |
+            | **Android** | Kaynak koddan | [Derleme adımları](https://github.com/Sanalarge/mause#build-from-source) |
+
+            ### Başlarken
+
+            1. Mause'yi iki cihaza da kurup açın. Cihazlar aynı ağda olsun.
+            2. Karşı cihazı listeden seçin, iki ekrandaki eşleşme kodunun aynı olduğunu onaylayın.
+            3. Fareyi ekranın kenarından karşı cihaza geçirin.
+
+            ### Bilmeniz gerekenler
+
+            - **macOS:** İlk açılışta uyarı çıkarsa *Sistem Ayarları › Gizlilik ve Güvenlik* bölümünden **Yine de Aç**'a tıklayın. Klavye ve fare için Erişilebilirlik izni gerekir.
+            - **Windows:** Kurulum, gerekli Visual C++ bileşenlerini ve seçilen USB sürücülerini kurar. Sürücüler yeniden başlatma isteyebilir.
+            - **Linux:** glibc 2.35+ (Ubuntu 22.04 ve sonrası) ve PipeWire gerekir. İzni verdikten sonra oturumu bir kez kapatıp açın.
+            - Mause erken geliştirme aşamasındadır. Güvendiğiniz bir yerel ağda kullanın.
+
+            <sub>Windows ZIP paketi yalnızca eski sürümlerin güncelleyicisi içindir. Setup dosyasının SHA256 özeti ve bağımlılık listesi aşağıdaki dosyalar arasındadır.</sub>
