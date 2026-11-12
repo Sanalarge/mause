@@ -1435,6 +1435,9 @@ fn run_session(
     let (ctrl, alt, home) = (ev::KEY_LEFTCTRL, ev::KEY_LEFTALT, ev::KEY_HOME);
     let (mut moved, mut moved_at) = (0i32, Instant::now());
     let mut gain = crate::pointer::Gain::new();
+    let local_scale = platform::ui_scale();
+    gain.set_local_scale(local_scale);
+    let mut incoming = crate::pointer::Incoming::new(local_scale);
     let mut pending: Option<Msg> = None;
 
     let (mut last_rx, mut last_ping) = (Instant::now(), Instant::now());
@@ -1773,9 +1776,10 @@ fn run_session(
                     inj.lock().unwrap().release_all();
                     set(mode);
                 }
-                Frame::Events(evs)
+                Frame::Events(mut evs)
                     if mode == Control::Controlled && sh.perms_for(&pid).control_in =>
                 {
+                    incoming.apply(&mut evs);
                     let mut leave = false;
                     for &(t, c, v) in &evs {
                         if t == ev::EV_REL {

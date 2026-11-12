@@ -814,3 +814,48 @@ pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
     let _ = conn.destroy_window(win);
     let _ = conn.flush();
 }
+
+/// Ekran koordinat birimi başına mantıksal piksel oranı. KDE (kscreen) ve
+/// Wayland zaten mantıksal boyut verir; X11'de Xft.dpi / GDK_SCALE okunur.
+pub fn ui_scale() -> f32 {
+    static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        if super::wayland::active() || detect_screen().is_some() {
+            return 1.0;
+        }
+        if let Some(v) = std::env::var("GDK_SCALE")
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
+        {
+            return v.clamp(0.5, 4.0);
+        }
+        xft_dpi().map_or(1.0, |d| (d / 96.0).clamp(0.5, 4.0))
+    })
+}
+
+fn xft_dpi() -> Option<f32> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+    let (conn, n) = x11rb::connect(None).ok()?;
+    let root = conn.setup().roots[n].root;
+    let reply = conn
+        .get_property(
+            false,
+            root,
+            AtomEnum::RESOURCE_MANAGER,
+            AtomEnum::STRING,
+            0,
+            1 << 20,
+        )
+        .ok()?
+        .reply()
+        .ok()?;
+    parse_xft_dpi(&String::from_utf8_lossy(&reply.value))
+}
+
+pub(super) fn parse_xft_dpi(db: &str) -> Option<f32> {
+    db.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        (k.trim() == "Xft.dpi").then(|| v.trim().parse().ok())?
+    })
+}

@@ -814,3 +814,13 @@ pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
         }
     }
 }
+
+/// Hareket birimi (fiziksel piksel) başına mantıksal piksel oranı: %150 ölçekte 1.5.
+pub fn ui_scale() -> f32 {
+    let dpi = unsafe { windows_sys::Win32::UI::HiDpi::GetDpiForSystem() };
+    if dpi == 0 {
+        1.0
+    } else {
+        (dpi as f32 / 96.0).clamp(0.5, 4.0)
+    }
+}

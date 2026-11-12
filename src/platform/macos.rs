@@ -757,3 +757,8 @@ mod tests {
         assert_eq!((p.x, p.y), (15.0, 12.0));
     }
 }
+
+/// macOS hareketleri zaten mantıksal "point" biriminde: ölçek 1.
+pub fn ui_scale() -> f32 {
+    1.0
+}
