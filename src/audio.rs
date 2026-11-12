@@ -147,6 +147,16 @@ impl Drop for Handle {
     }
 }
 
+/// Göndericinin ilk paket sayacı. Saatten (mikrosaniye) türetilir; böylece aynı
+/// oturumda gönderici yeniden başlatılsa bile sayaç hep ileri gider: alıcı yeni
+/// paketleri "eski" sanıp atmaz ve aynı anahtarla nonce tekrar kullanılmaz.
+fn first_counter() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0)
+}
+
 fn nonce(counter: u64) -> [u8; 12] {
     let mut n = [0u8; 12];
     n[4..].copy_from_slice(&counter.to_be_bytes());
@@ -190,7 +200,7 @@ pub fn start_sender(kind: u8, ip: &str, dev: &str, key: [u8; 32]) -> Option<Hand
     thread::spawn(move || {
         let cipher = ChaCha20Poly1305::new(&key.into());
         let mut buf = [0u8; CHUNK];
-        let mut counter = 0u64;
+        let mut counter = first_counter();
         while !st.load(Ordering::Relaxed) && out.read_exact(&mut buf).is_ok() {
             for part in buf.chunks(PACKET) {
                 if let Ok(ct) = cipher.encrypt(&nonce(counter).into(), part) {

@@ -5946,13 +5946,13 @@ impl App {
             if toggle_row(
                 ui,
                 "Bilgisayar açılınca Mause'u başlat",
-                Some(if cfg!(target_os = "linux") {
+                Some(if AUTOSTART_OK {
                     "Oturum açıldığında Mause arka planda çalışır."
                 } else {
                     "Bu platformda henüz desteklenmiyor."
                 }),
                 &mut au,
-                cfg!(target_os = "linux"),
+                AUTOSTART_OK,
             )
             .on_disabled_hover_text("Bu platformda henüz desteklenmiyor")
             .changed()
@@ -6759,13 +6759,93 @@ fn autostart_set(on: bool) {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+
+#[cfg(target_os = "windows")]
+fn reg(args: &[&str]) -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new("reg")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[cfg(target_os = "windows")]
+fn autostart_on() -> bool {
+    reg(&["query", RUN_KEY, "/v", "Mause"])
+}
+
+#[cfg(target_os = "windows")]
+fn autostart_set(on: bool) {
+    if on {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let value = format!("\"{}\"", exe.display());
+        reg(&[
+            "add", RUN_KEY, "/v", "Mause", "/t", "REG_SZ", "/d", &value, "/f",
+        ]);
+    } else {
+        reg(&["delete", RUN_KEY, "/v", "Mause", "/f"]);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join("Library/LaunchAgents/io.github.mause.plist")
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_on() -> bool {
+    autostart_path().exists()
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_set(on: bool) {
+    let p = autostart_path();
+    if on {
+        let exe = std::env::current_exe()
+            .map(|e| e.display().to_string())
+            .unwrap_or_else(|_| "/Applications/Mause.app/Contents/MacOS/mause".into());
+        let esc = exe
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(
+            p,
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>io.github.mause</string>\n<key>ProgramArguments</key><array><string>{esc}</string></array>\n<key>RunAtLoad</key><true/>\n</dict></plist>\n"
+            ),
+        );
+    } else {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 fn autostart_on() -> bool {
     false
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 fn autostart_set(_: bool) {}
+
+const AUTOSTART_OK: bool = cfg!(any(
+    target_os = "linux",
+    target_os = "windows",
+    target_os = "macos"
+));
 
 #[cfg(test)]
 fn ui_fixture(page: Page, theme: u8) -> App {

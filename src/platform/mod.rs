@@ -111,6 +111,46 @@ pub mod ev {
     pub const BTN_EXTRA: u16 = 0x114;
 }
 
+/// Fare başka PC'ye geçerken (ya da bu PC'ye gelirken) geçiş noktasında kısa
+/// süre yanıp sönen ince bir şerit gösterir. `vertical` sol/sağ kenar demektir.
+/// Desteklenmeyen ortamlarda (Wayland, macOS) hiçbir şey yapmaz.
+pub fn edge_flash(x: i32, y: i32, vertical: bool, w: i32, h: i32) {
+    if cfg!(test) {
+        return;
+    }
+    let (rx, ry, rw, rh) = flash_rect(x, y, vertical, w, h);
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    std::thread::spawn(move || flash_window(rx, ry, rw, rh));
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let _ = (rx, ry, rw, rh);
+}
+
+/// Parlama şeridinin dikdörtgeni: kenara yapışık, geçiş noktasında ortalanmış.
+pub fn flash_rect(x: i32, y: i32, vertical: bool, w: i32, h: i32) -> (i32, i32, i32, i32) {
+    const THICK: i32 = 6;
+    let w = w.max(THICK);
+    let h = h.max(THICK);
+    if vertical {
+        let len = (h / 5).clamp(80, 320).min(h);
+        let top = (y - len / 2).clamp(0, h - len);
+        let left = if x < w / 2 { 0 } else { w - THICK };
+        (left, top, THICK, len)
+    } else {
+        let len = (w / 5).clamp(80, 320).min(w);
+        let left = (x - len / 2).clamp(0, w - len);
+        let top = if y < h / 2 { 0 } else { h - THICK };
+        (left, top, len, THICK)
+    }
+}
+
+/// Parlama renkleri (0xRRGGBB): vurgu mavisi ile açık tonu arasında titrer.
+#[allow(dead_code)]
+pub const FLASH_COLORS: [u32; 2] = [0x3D8BFF, 0xBFDBFF];
+#[allow(dead_code)]
+pub const FLASH_STEPS: u32 = 6;
+#[allow(dead_code)]
+pub const FLASH_STEP_MS: u64 = 70;
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
@@ -147,5 +187,12 @@ mod capture_tests {
         assert!(Capture::from_bytes(2, 2, usize::MAX, 0, &[0; 32], false).is_none());
         assert!(Capture::from_bytes(0, 2, 8, 0, &[0; 32], false).is_none());
         assert!(Capture::from_bytes(2, 2, 8, 0, &[0; 15], false).is_none());
+    }
+    #[test]
+    fn flash_strip_hugs_the_crossing_edge() {
+        assert_eq!(flash_rect(1919, 540, true, 1920, 1080), (1914, 432, 6, 216));
+        assert_eq!(flash_rect(0, 5, true, 1920, 1080), (0, 0, 6, 216));
+        assert_eq!(flash_rect(1900, 0, false, 1920, 1080), (1600, 0, 320, 6));
+        assert_eq!(flash_rect(10, 1079, false, 1920, 1080), (0, 1074, 320, 6));
     }
 }

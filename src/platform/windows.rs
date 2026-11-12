@@ -748,3 +748,69 @@ pub fn config_dir() -> PathBuf {
 pub fn hostname() -> String {
     std::env::var("COMPUTERNAME").unwrap_or_default()
 }
+
+pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateSolidBrush, DeleteObject, InvalidateRect, UpdateWindow,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DestroyWindow, GCLP_HBRBACKGROUND, LWA_ALPHA, MSG, PM_REMOVE, PeekMessageW,
+        SW_SHOWNOACTIVATE, SetClassLongPtrW, SetLayeredWindowAttributes, ShowWindow, WNDCLASSW,
+        WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+        WS_POPUP,
+    };
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let bgr = |c: u32| ((c & 0xFF) << 16) | (c & 0xFF00) | ((c >> 16) & 0xFF);
+    let class: Vec<u16> = "MauseEdgeFlash\0".encode_utf16().collect();
+    unsafe {
+        let inst = GetModuleHandleW(null());
+        let brushes = [
+            CreateSolidBrush(bgr(super::FLASH_COLORS[0])),
+            CreateSolidBrush(bgr(super::FLASH_COLORS[1])),
+        ];
+        let mut wc: WNDCLASSW = zeroed();
+        wc.lpfnWndProc = Some(DefWindowProcW);
+        wc.hInstance = inst;
+        wc.lpszClassName = class.as_ptr();
+        wc.hbrBackground = brushes[0];
+        RegisterClassW(&wc);
+        let hwnd = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED,
+            class.as_ptr(),
+            null(),
+            WS_POPUP,
+            x + GetSystemMetrics(SM_XVIRTUALSCREEN),
+            y + GetSystemMetrics(SM_YVIRTUALSCREEN),
+            w,
+            h,
+            null_mut(),
+            null_mut(),
+            inst,
+            null(),
+        );
+        if !hwnd.is_null() {
+            SetLayeredWindowAttributes(hwnd, 0, 230, LWA_ALPHA);
+            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            for step in 0..super::FLASH_STEPS {
+                SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, brushes[step as usize % 2] as _);
+                InvalidateRect(hwnd, null(), 1);
+                UpdateWindow(hwnd);
+                let until = Instant::now() + Duration::from_millis(super::FLASH_STEP_MS);
+                while Instant::now() < until {
+                    let mut msg: MSG = zeroed();
+                    while PeekMessageW(&mut msg, hwnd, 0, 0, PM_REMOVE) != 0 {
+                        TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+            DestroyWindow(hwnd);
+        }
+        for b in brushes {
+            DeleteObject(b as _);
+        }
+    }
+}

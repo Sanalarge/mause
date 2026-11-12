@@ -863,6 +863,8 @@ fn main_loop(cfg: &Config, sh: &Arc<Shared>) -> io::Result<()> {
     Ok(())
 }
 
+const ECHO_NOTE: &str = "İki PC aynı anda birbirine sistem sesi gönderirse ses kendini besleyip parazit yapar; bu yüzden PC sesi tek yönde aktarılıyor.";
+
 struct Start {
     initiator: bool,
     peer: String,
@@ -1182,6 +1184,16 @@ fn beyond(x: i32, y: i32, w: i32, h: i32) -> Option<Side> {
     }
 }
 
+/// Gerçek imleç, geçiş yapılacak kenara dayanmış mı (2 piksel tolerans).
+fn at_edge(x: i32, y: i32, edge: Side, w: i32, h: i32) -> bool {
+    match edge {
+        Side::Left => x <= 1,
+        Side::Right => x >= w - 2,
+        Side::Top => y <= 1,
+        Side::Bottom => y >= h - 2,
+    }
+}
+
 fn edge_along(x: i32, y: i32, edge: Side, w: i32, h: i32) -> u16 {
     if matches!(edge, Side::Left | Side::Right) {
         (y.clamp(0, h - 1) * 65535 / h) as u16
@@ -1386,11 +1398,18 @@ fn run_session(
     let mut info_sent = String::new();
     let mut usb_server: Option<usb::Tunnel> = None;
     let mut audio_retry: [Option<Instant>; 2] = [None, None];
+    // Ses isteği gönderildiği halde paket gelmiyorsa (istek karşıda henüz izin/
+    // cihaz hazır değilken reddedildi, gönderici açılamadı vb.) isteği yineler.
+    let mut audio_asked: [Option<Instant>; 2] = [None, None];
+    let mut echo_warned = false;
     let mut screen_retry: Option<Instant> = None;
     let mut usb_client: Option<usb::Tunnel> = None;
     let hit = |nx: i32, ny: i32| beyond(nx, ny, w, h) == Some(eff);
     let along = |x: i32, y: i32| edge_along(x, y, eff, w, h);
     let place = |pos: u16, inset: i32| edge_point(pos, eff, inset, w, h);
+    let flash = |edge: Side, x: i32, y: i32| {
+        platform::edge_flash(x, y, matches!(edge, Side::Left | Side::Right), w, h)
+    };
     let child_on = |edge: Side| -> Option<u64> {
         sh.links
             .lock()
@@ -1555,8 +1574,36 @@ fn run_session(
                     }
                     audio_retry[i] = None;
                 }
+                if want && i == 0 && send[0].is_some() {
+                    // İki PC birbirine aynı anda sistem sesini gönderirse her biri
+                    // diğerinin sesini yeniden yakalayıp geri yollar: kendini besleyen
+                    // uğultu/parazit oluşur. Tek yön seçilir: bağlantıyı başlatan PC
+                    // öncelikli; diğeri karşı onu dinlerken istek göndermez.
+                    if !initiator {
+                        if !echo_warned {
+                            echo_warned = true;
+                            sh.log(ECHO_NOTE);
+                        }
+                        continue;
+                    }
+                    send[0] = None;
+                    sh.update_link(session, |l| l.sending[0] = false);
+                    sh.log(ECHO_NOTE);
+                }
                 write_frame(&mut s, &Frame::AudioReq(i as u8, want))?;
                 sent[i] = want;
+                audio_asked[i] = want.then(Instant::now);
+            } else if want
+                && sent[i]
+                && pflags & (2 << i) != 0
+                && audio_asked[i].is_some_and(|t| t.elapsed() >= Duration::from_secs(3))
+                && sh.relay_last[i]
+                    .lock()
+                    .unwrap()
+                    .is_none_or(|t| t.elapsed() >= Duration::from_secs(3))
+            {
+                write_frame(&mut s, &Frame::AudioReq(i as u8, true))?;
+                audio_asked[i] = Some(Instant::now());
             }
         }
         let want = screen_mine && sh.screen_want.load(Ordering::Relaxed);
@@ -1715,6 +1762,7 @@ fn run_session(
                         mode = Control::Controlled;
                         (x, y) = place(yf, 0);
                         inj.lock().unwrap().warp(x, y, w, h)?;
+                        flash(eff, x, y);
                         set(mode);
                     } else {
                         write_frame(&mut s, &Frame::Reclaim)?;
@@ -1762,6 +1810,7 @@ fn run_session(
                         platform::grab(false);
                         (x, y) = place(yf, 1);
                         inj.lock().unwrap().warp(x, y, w, h)?;
+                        flash(eff, x, y);
                     }
                     set(mode);
                 }
@@ -1922,8 +1971,25 @@ fn run_session(
                 {
                     sh.log("Karşı PC ses/mikrofon istedi ama ayarlarda izin kapalı; reddedildi.");
                 }
+                Frame::AudioReq(0, true) if initiator && recv[0].is_some() => {
+                    if !echo_warned {
+                        echo_warned = true;
+                        sh.log(ECHO_NOTE);
+                    }
+                }
                 Frame::AudioReq(kind, on) if kind < 2 => {
                     let dev = sh.src.lock().unwrap()[kind as usize].clone();
+                    if kind == 0 && on && recv[0].take().is_some() {
+                        // Karşı bizi dinlemek istiyor ve öncelik onda: bizim dinlememizi bırak.
+                        sent[0] = false;
+                        write_frame(&mut s, &Frame::AudioReq(0, false))?;
+                        sh.log(ECHO_NOTE);
+                    }
+                    if !on {
+                        echo_warned = false;
+                    }
+                    let already = on && send[kind as usize].is_some();
+                    send[kind as usize] = None;
                     send[kind as usize] = if on {
                         audio::start_sender(
                             kind,
@@ -1936,7 +2002,7 @@ fn run_session(
                     };
                     let on_air = send[kind as usize].is_some();
                     sh.update_link(session, |l| l.sending[kind as usize] = on_air);
-                    if on {
+                    if on && !already {
                         sh.log(if kind == 0 {
                             "Karşı PC sesinizi istiyor: aktarılıyor."
                         } else {
@@ -2002,6 +2068,19 @@ fn run_session(
                 if mode == Control::Local && mv > 0 {
                     let (dx, dy) = crate::pointer::motion(&evs);
                     gain.observe(dx, dy, platform::cursor_pos);
+                }
+                if cross && mode == Control::Local {
+                    // Konum ham fare hareketinden tahmin edilir; işletim sisteminin
+                    // ivmelenmesi yüzünden gerçek imleçten kayabilir ve fare ekranın
+                    // ortasındayken bile "kenara geldi" sanılırdı. Gerçek imleç
+                    // okunabiliyorsa geçişi ona göre onayla ve tahmini düzelt.
+                    if let Some((rx, ry)) = platform::cursor_pos() {
+                        if !at_edge(rx, ry, eff, w, h) {
+                            cross = false;
+                        }
+                        x = rx.clamp(0, w - 1);
+                        y = ry.clamp(0, h - 1);
+                    }
                 }
                 match mode {
                     Control::Remote => {
@@ -2070,6 +2149,7 @@ fn run_session(
                         let pos = along(x, y);
                         write_frame(&mut s, &Frame::Enter(pos, eff.to_u8()))?;
                         mirror = edge_point(pos, far_home, 0, pw, ph);
+                        flash(eff, x, y);
                         sh.log(gain.describe());
                         set(mode);
                     }

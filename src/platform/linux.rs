@@ -766,3 +766,51 @@ mod tests {
         println!("okunamayan: {missing:?}");
     }
 }
+
+pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{
+        ChangeWindowAttributesAux, ConnectionExt, CreateWindowAux, WindowClass,
+    };
+    if super::wayland::active() || w <= 0 || h <= 0 {
+        return;
+    }
+    let Ok((conn, n)) = x11rb::connect(None) else {
+        return;
+    };
+    let screen = &conn.setup().roots[n];
+    let Ok(win) = conn.generate_id() else {
+        return;
+    };
+    let aux = CreateWindowAux::new()
+        .override_redirect(1)
+        .background_pixel(super::FLASH_COLORS[0]);
+    let made = conn.create_window(
+        screen.root_depth,
+        win,
+        screen.root,
+        x as i16,
+        y as i16,
+        w as u16,
+        h as u16,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        screen.root_visual,
+        &aux,
+    );
+    if made.is_err() || conn.map_window(win).is_err() {
+        return;
+    }
+    for step in 0..super::FLASH_STEPS {
+        let color = super::FLASH_COLORS[step as usize % 2];
+        let _ = conn.change_window_attributes(
+            win,
+            &ChangeWindowAttributesAux::new().background_pixel(color),
+        );
+        let _ = conn.clear_area(false, win, 0, 0, 0, 0);
+        let _ = conn.flush();
+        std::thread::sleep(std::time::Duration::from_millis(super::FLASH_STEP_MS));
+    }
+    let _ = conn.destroy_window(win);
+    let _ = conn.flush();
+}

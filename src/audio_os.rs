@@ -112,6 +112,13 @@ impl Drop for Handle {
     }
 }
 
+fn first_counter() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0)
+}
+
 fn nonce(counter: u64) -> [u8; 12] {
     let mut n = [0u8; 12];
     n[4..].copy_from_slice(&counter.to_be_bytes());
@@ -223,7 +230,7 @@ pub fn start_sender(kind: u8, ip: &str, dev: &str, key: [u8; 32]) -> Option<Hand
         let _ = ready_tx.send(true);
         let cipher = ChaCha20Poly1305::new(&key.into());
         let mut resampler = Resampler::new(config.sample_rate, RATE);
-        let (mut frames, mut counter) = (Vec::<[f32; 2]>::new(), 0u64);
+        let (mut frames, mut counter) = (Vec::<[f32; 2]>::new(), first_counter());
         while !st.load(Ordering::Relaxed) {
             let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) else {
                 continue;
