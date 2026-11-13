@@ -38,6 +38,8 @@ mod tray;
 mod update;
 mod usb;
 mod vcam;
+#[cfg(target_os = "windows")]
+mod vdisplay;
 mod video;
 
 use config::{Config, Side};
@@ -62,6 +64,17 @@ fn main() {
         #[cfg(target_os = "linux")]
         for l in platform::capture_report() {
             println!("{l}");
+        }
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    if args[0] == "virtual-display-park" {
+        match vdisplay::park() {
+            Ok(()) => println!("Sanal ekran kapatıldı."),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
         }
         return;
     }

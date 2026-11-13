@@ -1,5 +1,25 @@
 # Windows setup
 
+## Ek monitör ve mevcut ekran
+
+İki PC'ye de güncel Mause kurulmalıdır. Masaüstü genişletilecek Windows PC'de
+Ayarlar → Ekran paylaşımı → **Sanal ekran sürücüsünü kur** seçilir. Bu bir kerelik
+işlem internet ve yönetici onayı ister; SHA256 özeti sabitlenmiş, SignPath imzalı
+Virtual Display Driver 25.7.23 paketini resmi projesinden indirir. Mevcut sürücü
+ve ayarları korunur; imza denetimi veya test-signing ayarları değiştirilmez.
+
+Diğer PC'de Ekran izleme penceresinden **Ek monitör** ve çözünürlük seçilir.
+Windows masaüstü sanal ekrana genişler; pencereler bu ekrana taşınabilir.
+**Tam ekran** düğmesi izleme penceresini monitör gibi kullanmayı sağlar.
+**Mevcut ekranı izle** seçeneği ve ekran listesi ana/fiziksel ekranı gösterir.
+Modlar paylaşım sırasında değiştirilebilir. Paylaşım kapanınca önceki ekran
+düzeni geri yüklenir. Mause zorla sonlandırılırsa Windows görüntü ayarlarından
+sanal ekranı kapatmak gerekebilir. Sanal ekranı Windows'un ana ekranı yapmak
+desteklenmez; fiziksel ana ekran korunur.
+
+Sürücü isteğe bağlıdır; standart Mause kurulum paketine gömülmez. Kaynak kodu
+ve MIT lisansı: https://github.com/VirtualDrivers/Virtual-Display-Driver
+
 Windows dağıtımının ana çıktısı `mause-v<sürüm>-windows-x86_64-setup.exe` dosyasıdır. Windows 10 1903+ / Windows 11 x64 içindir; ARM64 kurulum paketi bu akışta üretilmez.
 
 ## Kullanıcı kurulumu

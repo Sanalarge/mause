@@ -558,7 +558,8 @@ pub fn screen_capture_begin() -> bool {
 }
 
 pub fn screen_capture_begin_virtual(_: (u16, u16)) -> bool {
-    false
+    // The sender thread activates the display and reports detailed errors to the viewer.
+    true
 }
 
 pub fn screen_capture_error() -> Option<String> {

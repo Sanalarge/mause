@@ -281,6 +281,16 @@ impl Config {
                 "screen_max_w" => c.screen.max_w = v.parse().unwrap_or(1920),
                 "screen_monitor" => c.screen.monitor = v.parse().unwrap_or(0),
                 "screen_cursor" => c.screen.cursor = v != "0",
+                "screen_extend" => {
+                    c.screen.extend = v.split_once('x').and_then(|(w, h)| {
+                        let size = (w.parse().ok()?, h.parse().ok()?);
+                        matches!(
+                            size,
+                            (1280, 720) | (1920, 1080) | (2560, 1440) | (3840, 2160)
+                        )
+                        .then_some(size)
+                    })
+                }
                 "exclude" if !v.is_empty() => c.excluded.push(v),
                 "pair" => {
                     let mut it = v.splitn(3, '|');
@@ -378,6 +388,9 @@ impl Config {
             "allow_remote_prefs={}\n",
             self.allow_remote_prefs as u8
         ));
+        if let Some((w, h)) = self.screen.extend {
+            s.push_str(&format!("screen_extend={w}x{h}\n"));
+        }
         for d in &self.usb_shared {
             s.push_str(&format!("usb_share={}\n", d.replace('\n', " ")));
         }
@@ -408,6 +421,17 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn virtual_display_preference_accepts_supported_sizes_only() {
+        let mut c = Config::default();
+        c.parse("screen_extend=1920x1080\n");
+        assert_eq!(c.screen.extend, Some((1920, 1080)));
+        for bad in ["0x0", "9999x9999", "1920", "abc", "1920x0"] {
+            c.parse(&format!("screen_extend={bad}\n"));
+            assert_eq!(c.screen.extend, None);
+        }
+    }
 
     #[test]
     fn eski_klasor_izni_kapaliysa_dosya_izni_kapali_baslar() {

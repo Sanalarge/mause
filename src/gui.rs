@@ -245,6 +245,8 @@ struct App {
     camera: Option<CameraView>,
     torch_on: HashSet<String>,
     vcam_note: Arc<Mutex<Option<String>>>,
+    #[cfg(target_os = "windows")]
+    vdisplay_note: Arc<Mutex<Option<String>>>,
     screen_ctrl: bool,
     screen_mods: [bool; 4],
     screen_down: Vec<u16>,
@@ -324,6 +326,8 @@ impl App {
             camera: None,
             torch_on: HashSet::new(),
             vcam_note: Arc::default(),
+            #[cfg(target_os = "windows")]
+            vdisplay_note: Arc::default(),
             screen_ctrl: false,
             screen_mods: [false; 4],
             screen_down: Vec::new(),
@@ -1016,6 +1020,14 @@ fn section(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::U
 }
 
 fn stream_controls(ui: &mut egui::Ui, id: &str, o: &mut screen::Opts) {
+    egui::ComboBox::from_id_salt((id, "display_mode"))
+        .selected_text(if o.extend.is_some() { "Ek monitör olarak kullan" } else { "Mevcut ekranı izle" })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut o.extend, None, "Mevcut ekranı izle");
+            for (size, label) in [((1920, 1080), "Ek monitör: 1920×1080"), ((2560, 1440), "Ek monitör: 2560×1440"), ((3840, 2160), "Ek monitör: 3840×2160")] {
+                ui.selectable_value(&mut o.extend, Some(size), label);
+            }
+        }).response.on_hover_text("Ek monitör modunda, ekranını izlediğiniz PC'nin masaüstü bu pencereye genişletilir. Windows'ta ekranı paylaşılan PC'ye sanal ekran sürücüsü kurulmalıdır.");
     let pick = |ui: &mut egui::Ui, key: &str, value: &mut u16, choices: &[(u16, &str)]| {
         let current = choices
             .iter()
@@ -4632,7 +4644,7 @@ impl App {
         let mut o = self.cfg.screen;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
-            if monitors.len() > 1 {
+            if o.extend.is_none() && !monitors.is_empty() {
                 let current = monitors.get(o.monitor as usize).cloned().unwrap_or_else(|| monitors[0].clone());
                 egui::ComboBox::from_id_salt("screen_monitor").selected_text(current).show_ui(ui, |ui| {
                     for (i, name) in monitors.iter().enumerate() {
@@ -4641,6 +4653,10 @@ impl App {
                 });
             }
             stream_controls(ui, "bar", &mut o);
+            let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+            if ui.button(if fullscreen { "Pencereye dön" } else { "Tam ekran" }).clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+            }
             ui.separator();
             let tip = if may_control {
                 "Açıkken bu penceredeki mouse ve klavye karşı PC'yi yönetir."
@@ -6422,6 +6438,45 @@ impl App {
 
     fn screen_section(&mut self, ui: &mut egui::Ui) {
         section(ui, Some("Ekran paylaşımı"), |ui| {
+            #[cfg(target_os = "windows")]
+            {
+                hint(
+                    ui,
+                    "Bu PC'nin masaüstünü diğer PC'ye genişletmek için sürücüyü bu PC'ye kurun. Diğer PC'de Ekran penceresinden ‘Ek monitör olarak kullan’ı seçin. Ana ekranı görmek için ‘Mevcut ekranı izle’yi seçin.",
+                );
+                let ready = crate::vdisplay::available();
+                let busy = self.vdisplay_note.lock().unwrap().as_deref() == Some("Kuruluyor…");
+                if ui
+                    .add_enabled(
+                        !ready && !busy,
+                        egui::Button::new(if ready {
+                            "Sanal ekran sürücüsü hazır"
+                        } else {
+                            "Sanal ekran sürücüsünü kur"
+                        }),
+                    )
+                    .clicked()
+                {
+                    let note = self.vdisplay_note.clone();
+                    *note.lock().unwrap() = Some("Kuruluyor…".into());
+                    std::thread::spawn(move || {
+                        *note.lock().unwrap() = Some(match crate::vdisplay::setup() {
+                            Ok(()) => "Sanal ekran sürücüsü hazır.".into(),
+                            Err(e) => format!("Kurulamadı: {e}"),
+                        });
+                    });
+                }
+                if let Some(note) = self.vdisplay_note.lock().unwrap().as_ref() {
+                    ui.label(note);
+                }
+                if ready && ui.button("Sanal ekranı kapat").on_hover_text("Aktif paylaşım yokken sanal monitörü Windows masaüstünden kaldırır; sürücü kurulu kalır.").clicked() {
+                    *self.vdisplay_note.lock().unwrap() = Some(match crate::vdisplay::park() {
+                        Ok(()) => "Sanal ekran kapatıldı; ek monitör paylaşımı başlayınca yeniden açılır.".into(),
+                        Err(e) => e,
+                    });
+                }
+                divider(ui);
+            }
             let mut changed = toggle_row(
                 ui,
                 "Karşı PC bu PC'nin ekranını izleyebilsin",
@@ -6896,6 +6951,8 @@ fn ui_fixture(page: Page, theme: u8) -> App {
         camera: None,
         torch_on: HashSet::new(),
         vcam_note: Arc::default(),
+        #[cfg(target_os = "windows")]
+        vdisplay_note: Arc::default(),
         screen_ctrl: false,
         screen_mods: [false; 4],
         screen_down: Vec::new(),

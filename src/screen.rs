@@ -394,9 +394,17 @@ pub(crate) fn send(
     let started = Instant::now();
     let mut encoder: Encoding = None;
     let mut h264_failed = false;
+    #[cfg(target_os = "windows")]
+    let (mut virtual_size, mut virtual_display) = (None, None::<crate::vdisplay::Lease>);
     while !stop.load(Ordering::Relaxed) {
         let t0 = Instant::now();
         let o = *opts.lock().unwrap();
+        #[cfg(target_os = "windows")]
+        if o.extend != virtual_size {
+            drop(virtual_display.take());
+            virtual_display = o.extend.map(crate::vdisplay::Lease::begin).transpose()?;
+            virtual_size = o.extend;
+        }
         let fps = if o.h264 && !h264_failed {
             stream_fps(o.fps)
         } else {
@@ -404,7 +412,16 @@ pub(crate) fn send(
         };
         crate::platform::capture_fps(fps);
         let tick = Duration::from_millis(1000 / fps.max(1) as u64);
-        let Some((mut cap, mon)) = crate::platform::capture_monitor(o.monitor as usize) else {
+        #[cfg(target_os = "windows")]
+        let monitor = match &virtual_display {
+            Some(display) => display
+                .monitor_index()
+                .ok_or_else(|| io::Error::other("Sanal ekran bağlantısı kesildi."))?,
+            None => o.monitor as usize,
+        };
+        #[cfg(not(target_os = "windows"))]
+        let monitor = o.monitor as usize;
+        let Some((mut cap, mon)) = crate::platform::capture_monitor(monitor) else {
             if crate::platform::screen_capture_pending() && started.elapsed() < FIRST_FRAME {
                 thread::sleep(Duration::from_millis(100));
                 continue;
