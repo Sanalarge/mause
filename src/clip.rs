@@ -49,7 +49,7 @@ pub fn current_files() -> Option<Vec<PathBuf>> {
         .lines()
         .filter_map(|l| l.trim().strip_prefix("file://"))
         .map(|p| PathBuf::from(pct_decode(p.strip_prefix("localhost").unwrap_or(p))))
-        .filter(|p| p.is_file())
+        .filter(|p| p.is_file() || p.is_dir())
         .collect();
     (!v.is_empty()).then_some(v)
 }

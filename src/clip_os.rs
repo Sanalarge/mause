@@ -19,7 +19,7 @@ pub fn current_files() -> Option<Vec<PathBuf>> {
         .file_list()
         .ok()?
         .into_iter()
-        .filter(|p| p.is_file())
+        .filter(|p| p.is_file() || p.is_dir())
         .collect();
     (!v.is_empty()).then_some(v)
 }

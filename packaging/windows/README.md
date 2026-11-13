@@ -1,5 +1,19 @@
 # Windows setup
 
+## Dosya ve klasör aktarımı
+
+Dosyalar sayfasında klasörü tek tıklamayla seçip **Gönder** veya **Al** düğmesine
+basın. Sağ tık menüsü ve sürükle-bırak da klasörleri destekler. Çift tıklama
+klasörü açmaya devam eder. Panodaki dosyaları ekran geçişinde taşıma seçeneği
+açıkken klasörler de taşınabilir.
+
+Alt klasörler, boş klasörler ve gizli dosyalar korunur. Klasör içeriği tek
+şifreli bağlantıda aktarılır; kullanıcıdan ZIP oluşturması istenmez. Hedefte
+aynı adlı öğe varsa ayrı bir ad seçilir. Kesilen aktarımın geçici içeriği
+temizlenir. Sembolik bağlantılar, Windows junction/reparse öğeleri ve özel
+dosyalar takip edilmez; bunları içeren aktarım açık bir hata verir.
+Klasör aktarımı için iki PC de bu özelliği içeren güncel Mause kullanmalıdır.
+
 ## Performans göstergeleri ve USB
 
 Ayarlar → **Performans göstergeleri** bölümünde bu PC'nin toplam kullanım

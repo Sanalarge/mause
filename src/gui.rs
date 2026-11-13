@@ -1380,10 +1380,10 @@ impl Pane {
         list
     }
 
-    fn selected_files(&self) -> Vec<String> {
+    fn selected_items(&self) -> Vec<String> {
         self.entries
             .iter()
-            .filter(|e| !e.dir && self.selected.contains(&e.name))
+            .filter(|e| self.selected.contains(&e.name))
             .map(|e| e.name.clone())
             .collect()
     }
@@ -1723,7 +1723,7 @@ fn file_pane(
     let mut action = None;
     let usable = head.note.is_none();
     let in_disks = pane.path == transfer::DISKS || pane.path.is_empty();
-    let files = pane.selected_files();
+    let files = pane.selected_items();
     let outer = ui.max_rect();
     ui.set_width(ui.available_width());
 
@@ -1822,9 +1822,9 @@ fn file_pane(
                 (false, false) => "Gönder".to_owned(),
             };
             let tip = if head.remote {
-                "Seçili dosyaları bu bilgisayarda açık klasöre indir"
+                "Seçili dosya ve klasörleri bu bilgisayara al"
             } else {
-                "Seçili dosyaları karşıda açık klasöre gönder"
+                "Seçili dosya ve klasörleri karşıya gönder"
             };
             if transfer_key(ui, &label, head.remote, usable && head.can_act && count > 0)
                 .on_hover_text(tip)
@@ -2005,7 +2005,7 @@ fn file_pane(
                     if e.dir && ui.button("Aç").clicked() {
                         action = Some(PaneAction::Open(pane.path.clone(), e.name.clone()));
                     }
-                    let files = pane.selected_files();
+                    let files = pane.selected_items();
                     let verb = if head.remote {
                         "Bu bilgisayara al"
                     } else {
@@ -6041,7 +6041,19 @@ impl App {
                     let dir = self.remote.lock().unwrap().path.clone();
                     for name in names {
                         let dirty = self.local_dirty.clone();
-                        transfer::download(
+                        let folder = self
+                            .remote
+                            .lock()
+                            .unwrap()
+                            .entries
+                            .iter()
+                            .any(|e| e.name == name && e.dir);
+                        let download = if folder {
+                            transfer::download_folder
+                        } else {
+                            transfer::download
+                        };
+                        download(
                             sh.clone(),
                             dir.clone(),
                             name,
@@ -6332,7 +6344,7 @@ impl App {
             let mut carry = self.cfg.carry_files;
             if toggle_row(
                 ui,
-                "Kopyalanan dosyaları ekran geçişinde taşı",
+                "Kopyalanan dosya ve klasörleri ekran geçişinde taşı",
                 Some(if supported {
                     carry_hint.as_str()
                 } else {
@@ -7246,7 +7258,7 @@ mod file_pane_tests {
         pane.select("Klasör", &order, false, false);
         pane.select("b.txt", &order, false, true);
         assert_eq!(pane.selected.len(), 3);
-        assert_eq!(pane.selected_files(), ["b.txt", "a.txt"]);
+        assert_eq!(pane.selected_items(), ["b.txt", "Klasör", "a.txt"]);
         pane.select("a.txt", &order, true, false);
         assert!(!pane.selected.contains("a.txt"));
         pane.select("a.txt", &order, false, false);
