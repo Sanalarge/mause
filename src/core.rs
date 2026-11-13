@@ -220,6 +220,12 @@ impl Perms {
     }
 }
 
+#[derive(Clone)]
+pub struct LogEntry {
+    pub time: String,
+    pub text: String,
+}
+
 pub struct Shared {
     pub config: Mutex<Option<Config>>,
     #[cfg(test)]
@@ -227,7 +233,7 @@ pub struct Shared {
     pub stop: AtomicBool,
     pub done: AtomicBool,
     pub state: Mutex<State>,
-    pub log: Mutex<Vec<String>>,
+    pub log: Mutex<Vec<LogEntry>>,
     pub want: [AtomicBool; 2],
     pub sending: [AtomicBool; 2],
     pub relay_last: [Arc<Mutex<Option<Instant>>>; 2],
@@ -483,7 +489,10 @@ impl Shared {
             eprintln!("{s}");
         }
         let mut l = self.log.lock().unwrap();
-        l.push(s);
+        l.push(LogEntry {
+            time: chrono::Local::now().format("%H:%M:%S").to_string(),
+            text: s,
+        });
         let n = l.len();
         if n > 300 {
             l.drain(..n - 300);
@@ -742,6 +751,18 @@ fn secret_for(sh: &Shared, id: &str) -> Option<String> {
 
 type Incoming = (Secure, u8, String, String, SocketAddr);
 
+fn port_error(error: io::Error, port: &str) -> io::Error {
+    if error.kind() != io::ErrorKind::AddrInUse {
+        return error;
+    }
+    io::Error::new(
+        io::ErrorKind::AddrInUse,
+        format!(
+            "{port} portu başka bir uygulama tarafından kullanılıyor. Mause zaten açık olabilir; açıksa kapatın ya da Ayarlar → Bağlantı ve güvenlik bölümünden başka bir port seçin."
+        ),
+    )
+}
+
 fn main_loop(cfg: &Config, sh: &Arc<Shared>) -> io::Result<()> {
     let inj = Arc::new(Mutex::new(Injector::new().map_err(|e| {
         io::Error::other(format!(
@@ -753,7 +774,8 @@ fn main_loop(cfg: &Config, sh: &Arc<Shared>) -> io::Result<()> {
             "Uyarı: {e}. Bu PC karşıyı kontrol edemez, yalnızca kontrol edilebilir."
         ));
     }
-    let l = TcpListener::bind(format!("0.0.0.0:{}", cfg.port))?;
+    let l =
+        TcpListener::bind(format!("0.0.0.0:{}", cfg.port)).map_err(|e| port_error(e, &cfg.port))?;
     l.set_nonblocking(true)?;
     discover::announce(sh.clone(), cfg.name.clone(), cfg.port.clone());
     crate::transfer::serve(sh.clone());
@@ -761,7 +783,7 @@ fn main_loop(cfg: &Config, sh: &Arc<Shared>) -> io::Result<()> {
     sh.log(if manual {
         "Karşı PC'ye bağlanılıyor…"
     } else {
-        "Eşleşmiş cihazlar aranıyor… (yeni cihaz için Düzen sayfasından bağlantı isteği gönderin)"
+        "Eşleşmiş cihazlar aranıyor… (yeni bilgisayar için Paylaşım sayfasından bağlanın)"
     });
 
     let (itx, irx) = mpsc::channel::<Incoming>();

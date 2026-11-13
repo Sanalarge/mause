@@ -3,7 +3,7 @@ use std::process::Command;
 
 const REPO: &str = match option_env!("MAUSE_UPDATE_REPO") {
     Some(repo) => repo,
-    None => "",
+    None => "Sanalarge/mause",
 };
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const AFTER_UPDATE: &str = "MAUSE_UPDATED";
@@ -136,9 +136,10 @@ fn installed_by_package() -> bool {
     std::env::current_exe().is_ok_and(|p| p.starts_with("/usr/bin"))
 }
 
-fn parse_release(json: &str) -> Option<Release> {
+fn parse_release(json: &str) -> Result<Release, String> {
     let version = string_fields(json, "tag_name")
-        .first()?
+        .first()
+        .ok_or("GitHub yanıtında sürüm bilgisi bulunamadı")?
         .trim_start_matches('v')
         .to_owned();
     let page = string_fields(json, "html_url")
@@ -153,9 +154,15 @@ fn parse_release(json: &str) -> Option<Release> {
             cfg!(target_os = "windows")
                 .then(|| assets.iter().find(|u| u.ends_with("-windows-x86_64.zip")))
                 .flatten()
+        })
+        .ok_or_else(|| {
+            format!(
+                "{version} sürümünde bu sistem için kurulum paketi yok ({})",
+                asset_suffix()
+            )
         })?
         .to_string();
-    Some(Release {
+    Ok(Release {
         version,
         asset,
         page,
@@ -170,9 +177,22 @@ pub fn check() -> Result<Option<Release>, String> {
         &format!("https://api.github.com/repos/{REPO}/releases/latest"),
         None,
     )
-    .map_err(|e| format!("Güncelleme denetlenemedi ({e}). İnternet bağlantısını denetleyin."))?;
-    let r = parse_release(&String::from_utf8_lossy(&body)).ok_or("sürüm bilgisi okunamadı")?;
+    .map_err(|e| check_error(&e))?;
+    let r = parse_release(&String::from_utf8_lossy(&body))?;
     Ok(newer(&r.version, VERSION).then_some(r))
+}
+
+fn check_error(error: &str) -> String {
+    if error.contains("404") {
+        format!(
+            "Güncelleme denetlenemedi: {REPO} için yayımlanmış sürüm bulunamadı. Depo gizli olabilir ya da henüz sürüm yayımlanmamış."
+        )
+    } else if error.contains("403") || error.contains("429") {
+        "Güncelleme denetlenemedi: GitHub istek sınırı doldu. Biraz sonra yeniden deneyin."
+            .to_owned()
+    } else {
+        format!("Güncelleme denetlenemedi ({error}). İnternet bağlantısını denetleyin.")
+    }
 }
 
 pub fn releases_page() -> String {
@@ -210,6 +230,31 @@ fn restart(exe: &Path) -> ! {
     };
     let _ = { c }.spawn();
     std::process::exit(0);
+}
+
+pub fn installs_on_launch() -> bool {
+    let developer_build = cfg!(debug_assertions);
+    let preview = ["MAUSE_SHOT", "MAUSE_PAGE", "MAUSE_NO_AUTO_UPDATE"]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some());
+    let just_updated = std::env::var_os(AFTER_UPDATE).is_some();
+    !developer_build && !preview && !just_updated
+}
+
+fn attempt_marker() -> PathBuf {
+    crate::config::path().with_file_name("auto-update-attempt")
+}
+
+pub fn first_launch_attempt(version: &str) -> bool {
+    let marker = attempt_marker();
+    if std::fs::read_to_string(&marker).is_ok_and(|seen| seen.trim() == version) {
+        return false;
+    }
+    if let Some(dir) = marker.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&marker, version);
+    true
 }
 
 pub fn after_start() {
@@ -379,6 +424,22 @@ mod tests {
         assert_eq!(r.version, "0.1.9");
         assert!(r.page.ends_with("/v0.1.9"));
         assert!(r.asset.ends_with(asset_suffix()), "{}", r.asset);
+    }
+
+    #[test]
+    fn missing_release_is_not_reported_as_a_network_problem() {
+        let message = check_error("indirilemedi: curl: (22) The requested URL returned error: 404");
+        assert!(message.contains("sürüm bulunamadı"), "{message}");
+        assert!(!message.contains("İnternet"), "{message}");
+    }
+
+    #[test]
+    fn release_without_a_package_for_this_system_is_explained() {
+        let error = parse_release(r#"{"tag_name":"v0.2.0","assets":[]}"#).unwrap_err();
+        assert!(
+            error.contains("0.2.0") && error.contains("paket"),
+            "{error}"
+        );
     }
 
     #[cfg(target_os = "windows")]

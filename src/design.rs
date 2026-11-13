@@ -701,6 +701,16 @@ pub enum Icon {
     FolderPlus,
     More,
     Check,
+    Cpu,
+    Memory,
+    GraphicsCard,
+    HardDrive,
+    Network,
+    Info,
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
 }
 
 pub fn icon(painter: &egui::Painter, center: egui::Pos2, kind: Icon, color: Color32, size: f32) {
@@ -743,6 +753,16 @@ pub fn icon(painter: &egui::Painter, center: egui::Pos2, kind: Icon, color: Colo
         Icon::FolderPlus => '\u{e258}',
         Icon::More => '\u{e206}',
         Icon::Check => '\u{e182}',
+        Icon::Cpu => '\u{e610}',
+        Icon::Memory => '\u{e9c4}',
+        Icon::GraphicsCard => '\u{e612}',
+        Icon::HardDrive => '\u{e29e}',
+        Icon::Network => '\u{edde}',
+        Icon::Info => '\u{e2ce}',
+        Icon::Minimize => '\u{e32a}',
+        Icon::Maximize => '\u{e45e}',
+        Icon::Restore => '\u{e1cc}',
+        Icon::Close => '\u{e4f6}',
     };
     painter.text(
         center,

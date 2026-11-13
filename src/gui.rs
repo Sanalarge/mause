@@ -131,7 +131,7 @@ impl SettingsPage {
             SettingsPage::Connection => Icon::Shield,
             SettingsPage::Sharing => Icon::Share,
             SettingsPage::Log => Icon::Log,
-            SettingsPage::About => Icon::GitHub,
+            SettingsPage::About => Icon::Info,
         }
     }
 }
@@ -290,6 +290,7 @@ struct App {
     update: Arc<Mutex<Upd>>,
     usb_tools: Arc<Mutex<Option<String>>>,
     update_at: Option<Instant>,
+    install_on_launch: bool,
 }
 
 impl App {
@@ -375,6 +376,7 @@ impl App {
             update: Arc::new(Mutex::new(Upd::Unknown)),
             usb_tools: Arc::default(),
             update_at: None,
+            install_on_launch: update::installs_on_launch(),
         };
         app.restart_pending = true;
         app.start_pending_kvm();
@@ -2464,16 +2466,7 @@ fn modal_close_button(ui: &mut egui::Ui) -> egui::Response {
     } else {
         palette.ink2
     };
-    let center = rect.center();
-    let stroke = Stroke::new(1.6, ink);
-    ui.painter().line_segment(
-        [center + Vec2::new(-5.0, -5.0), center + Vec2::new(5.0, 5.0)],
-        stroke,
-    );
-    ui.painter().line_segment(
-        [center + Vec2::new(5.0, -5.0), center + Vec2::new(-5.0, 5.0)],
-        stroke,
-    );
+    design::icon(ui.painter(), rect.center(), Icon::Close, ink, 18.0);
     if response.has_focus() {
         ui.painter().rect_stroke(
             rect.expand(2.0),
@@ -2580,7 +2573,6 @@ fn notice(
 
 fn workflow_panel(
     ui: &mut egui::Ui,
-    step: &str,
     icon: Icon,
     title: &str,
     subtitle: &str,
@@ -2602,14 +2594,7 @@ fn workflow_panel(
                 ui.add_space(4.0);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 3.0;
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(step)
-                                .font(design::semibold(12.0))
-                                .color(palette.signal),
-                        );
-                        ui.label(design::strong(title, 18.0));
-                    });
+                    ui.label(design::strong(title, 18.0));
                     ui.label(RichText::new(subtitle).size(13.5).color(palette.muted));
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -2893,6 +2878,7 @@ impl eframe::App for App {
         if due {
             self.check_update();
         }
+        self.install_launch_update();
         self.absorb_learned();
         self.absorb_remote_prefs();
         self.absorb_connected_peer();
@@ -3105,6 +3091,105 @@ impl eframe::App for App {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum LogTone {
+    Error,
+    Warning,
+    Success,
+    Info,
+}
+
+fn log_tone(text: &str) -> LogTone {
+    const WARNING: [&str; 4] = ["Uyarı", "yeniden denenecek", "ama ayarlarda", "kapalı"];
+    const ERROR: [&str; 13] = [
+        "Hata",
+        "edilemedi",
+        "alınamadı",
+        "açılamadı",
+        "takılamadı",
+        "gönderilemedi",
+        "indirilemedi",
+        "aktarılamadı",
+        "okunamadı",
+        "başlatılamadı",
+        "verilemedi",
+        "kurulamadı",
+        "eddedildi",
+    ];
+    const SUCCESS: [&str; 7] = [
+        "Eşleşti",
+        "bağlandı",
+        "Doğrulanmış",
+        "Gönderildi",
+        "İndirildi",
+        "aktarıldı",
+        "takıldı",
+    ];
+    let has = |words: &[&str]| words.iter().any(|word| text.contains(word));
+    if has(&WARNING) {
+        LogTone::Warning
+    } else if has(&ERROR) {
+        LogTone::Error
+    } else if has(&SUCCESS) {
+        LogTone::Success
+    } else {
+        LogTone::Info
+    }
+}
+
+fn log_tag(tone: LogTone) -> &'static str {
+    match tone {
+        LogTone::Error => "HATA ",
+        LogTone::Warning => "UYARI",
+        LogTone::Success => "TAMAM",
+        LogTone::Info => "BİLGİ",
+    }
+}
+
+fn log_plain_line(entry: &core::LogEntry) -> String {
+    format!(
+        "{}  {}  {}",
+        entry.time,
+        log_tag(log_tone(&entry.text)),
+        entry.text
+    )
+}
+
+fn terminal_line(palette: Palette, entry: &core::LogEntry) -> egui::text::LayoutJob {
+    let terminal = Palette::new(true);
+    let tone = log_tone(&entry.text);
+    let tag_color = match tone {
+        LogTone::Error => terminal.bad,
+        LogTone::Warning => terminal.warn,
+        LogTone::Success => terminal.ok,
+        LogTone::Info => terminal.ink2,
+    };
+    let text_color = if tone == LogTone::Error {
+        terminal.bad
+    } else {
+        palette.graphite_ink
+    };
+    let font = FontId::monospace(13.0);
+    let format = |color: Color32| egui::TextFormat {
+        font_id: font.clone(),
+        color,
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(&entry.time, 0.0, format(terminal.muted));
+    job.append(log_tag(tone), 16.0, format(tag_color));
+    job.append(&entry.text, 16.0, format(text_color));
+    job
+}
+
+const PERFORMANCE_ICONS: [Icon; 5] = [
+    Icon::Cpu,
+    Icon::Memory,
+    Icon::GraphicsCard,
+    Icon::HardDrive,
+    Icon::Network,
+];
+
 fn red_dot(painter: &egui::Painter, center: egui::Pos2, radius: f32, palette: Palette) {
     painter.circle_filled(center, radius + 1.5, palette.surface);
     painter.circle_filled(center, radius, palette.bad);
@@ -3142,6 +3227,21 @@ fn status(state: &State, running: bool, palette: Palette) -> (String, Color32, I
 }
 
 impl App {
+    fn install_launch_update(&mut self) {
+        if !self.install_on_launch {
+            return;
+        }
+        let found = match &*self.update.lock().unwrap() {
+            Upd::Unknown | Upd::Checking => return,
+            Upd::Available(release) => Some(release.clone()),
+            _ => None,
+        };
+        self.install_on_launch = false;
+        if let Some(release) = found.filter(|r| update::first_launch_attempt(&r.version)) {
+            self.install_update(release);
+        }
+    }
+
     fn check_update(&mut self) {
         self.update_at = Some(Instant::now());
         let st = self.update.clone();
@@ -3642,8 +3742,7 @@ impl App {
         };
         workflow_panel(
             ui,
-            "01",
-            Icon::Link,
+            Icon::Plus,
             "Yeni bilgisayar ekle",
             "Ağdaki bir bilgisayarı seçin veya IP adresini girin.",
             (&connection_status, connection_tone),
@@ -3658,7 +3757,6 @@ impl App {
         let control_tone = if live > 0 { palette.ok } else { palette.muted };
         workflow_panel(
             ui,
-            "02",
             Icon::Screens,
             "Bilgisayarlarımı kontrol et",
             "Ekranları yerleştirin; imleci kenardan geçirerek kontrolü aktarın.",
@@ -3728,85 +3826,12 @@ impl App {
             } else {
                 palette.ink2
             };
-            match category {
-                0 => {
-                    painter.rect_stroke(
-                        egui::Rect::from_center_size(center, Vec2::splat(8.0)),
-                        1,
-                        Stroke::new(1.2, color),
-                        StrokeKind::Inside,
-                    );
-                    for d in [-2.0, 2.0] {
-                        for side in [-1.0, 1.0] {
-                            painter.line_segment(
-                                [
-                                    center + Vec2::new(d, side * 4.0),
-                                    center + Vec2::new(d, side * 6.0),
-                                ],
-                                Stroke::new(1.0, color),
-                            );
-                            painter.line_segment(
-                                [
-                                    center + Vec2::new(side * 4.0, d),
-                                    center + Vec2::new(side * 6.0, d),
-                                ],
-                                Stroke::new(1.0, color),
-                            );
-                        }
-                    }
-                }
-                1 => {
-                    painter.rect_stroke(
-                        egui::Rect::from_center_size(center, Vec2::new(13.0, 7.0)),
-                        1,
-                        Stroke::new(1.0, color),
-                        StrokeKind::Inside,
-                    );
-                    for x in [-4.0, 0.0, 4.0] {
-                        painter.rect_filled(
-                            egui::Rect::from_center_size(
-                                center + Vec2::new(x, 0.0),
-                                Vec2::new(2.0, 3.0),
-                            ),
-                            0,
-                            color,
-                        );
-                    }
-                }
-                2 => {
-                    painter.rect_stroke(
-                        egui::Rect::from_center_size(center, Vec2::new(14.0, 9.0)),
-                        1,
-                        Stroke::new(1.0, color),
-                        StrokeKind::Inside,
-                    );
-                    painter.circle_stroke(center, 2.5, Stroke::new(1.0, color));
-                }
-                3 => {
-                    painter.rect_stroke(
-                        egui::Rect::from_center_size(center, Vec2::new(11.0, 13.0)),
-                        2,
-                        Stroke::new(1.0, color),
-                        StrokeKind::Inside,
-                    );
-                    painter.circle_stroke(
-                        center + Vec2::new(0.0, -1.0),
-                        3.0,
-                        Stroke::new(1.0, color),
-                    );
-                }
-                _ => design::icon(painter, center, Icon::Link, color, 14.0),
-            }
-            let label = value.map_or_else(
-                || {
-                    if sample.is_some() && category == 4 {
-                        "↕".into()
-                    } else {
-                        "—".into()
-                    }
-                },
-                |v| format!("{:.0}%", v * 100.0),
-            );
+            design::icon(painter, center, PERFORMANCE_ICONS[category], color, 15.0);
+            let label = match (value, &sample) {
+                (Some(v), _) => format!("{:.0}%", v * 100.0),
+                (None, Some(s)) if category == 4 => s.sample.traffic_label(),
+                _ => "—".into(),
+            };
             painter.text(
                 center + Vec2::new(0.0, 13.0),
                 Align2::CENTER_CENTER,
@@ -7405,14 +7430,15 @@ impl App {
     }
 
     fn page_log(&mut self, ui: &mut egui::Ui) {
-        let lines: Vec<String> = self
+        let lines: Vec<core::LogEntry> = self
             .shared
             .as_ref()
             .map(|s| s.log.lock().unwrap().clone())
             .unwrap_or_default();
         ui.horizontal(|ui| {
             if design::key(ui, "Kopyala", KeyKind::Plain, !lines.is_empty(), 0.0).clicked() {
-                ui.ctx().copy_text(lines.join("\n"));
+                let text: Vec<String> = lines.iter().map(log_plain_line).collect();
+                ui.ctx().copy_text(text.join("\n"));
             }
             if design::key(ui, "Temizle", KeyKind::Plain, !lines.is_empty(), 0.0).clicked() {
                 if let Some(s) = &self.shared {
@@ -7421,32 +7447,35 @@ impl App {
             }
         });
         ui.add_space(12.0);
-        if lines.is_empty() {
-            empty_state(
-                ui,
-                Icon::Log,
-                "Henüz bir bağlantı olayı yok",
-                "Paylaşım başladığında bağlantı ve aktarım olaylarını burada izleyebilirsiniz.",
-            );
-            return;
-        }
         let palette = Palette::of(ui);
+        let height = (ui.available_height() - 36.0).max(320.0);
         egui::Frame::new()
             .fill(palette.graphite)
             .corner_radius(RADIUS_PANEL)
-            .inner_margin(Margin::symmetric(18, 16))
+            .inner_margin(Margin::symmetric(16, 14))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                for l in &lines {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(l)
+                egui::ScrollArea::vertical()
+                    .id_salt("log_terminal")
+                    .max_height(height)
+                    .min_scrolled_height(height)
+                    .auto_shrink([false, false])
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 3.0;
+                        if lines.is_empty() {
+                            ui.label(
+                                RichText::new(
+                                    "Henüz kayıt yok. Bağlantı ve aktarım olayları burada akacak.",
+                                )
                                 .font(FontId::monospace(13.0))
-                                .color(palette.graphite_ink),
-                        )
-                        .wrap(),
-                    );
-                }
+                                .color(Palette::new(true).muted),
+                            );
+                        }
+                        for entry in &lines {
+                            ui.add(egui::Label::new(terminal_line(palette, entry)).wrap());
+                        }
+                    });
             });
     }
 }
@@ -7631,6 +7660,27 @@ fn ui_fixture(page: Page, theme: u8) -> App {
         update: Arc::new(Mutex::new(Upd::Unknown)),
         usb_tools: Arc::default(),
         update_at: None,
+        install_on_launch: false,
+    }
+}
+
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+
+    #[test]
+    fn log_lines_are_grouped_by_tone() {
+        assert_eq!(log_tone("Hata: 24800 portu kullanılıyor"), LogTone::Error);
+        assert_eq!(
+            log_tone("'rapor.pdf' gönderilemedi: zaman aşımı"),
+            LogTone::Error
+        );
+        assert_eq!(
+            log_tone("10.0.0.5 bulunamadı (zaman aşımı); yeniden denenecek…"),
+            LogTone::Warning
+        );
+        assert_eq!(log_tone("Eşleşti: Ofis (10.0.0.5)"), LogTone::Success);
+        assert_eq!(log_tone("Durduruldu."), LogTone::Info);
     }
 }
 

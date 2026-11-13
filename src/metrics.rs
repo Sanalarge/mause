@@ -114,6 +114,28 @@ impl Sample {
             ),
         }
     }
+
+    pub fn traffic_label(&self) -> String {
+        match (self.values[RX], self.values[TX]) {
+            (Some(rx), Some(tx)) => compact_rate(rx.saturating_add(tx)),
+            _ => "—".into(),
+        }
+    }
+}
+
+fn compact_rate(bytes_per_second: u64) -> String {
+    let mut n = bytes_per_second as f64;
+    let units = ["B", "K", "M", "G"];
+    let mut i = 0;
+    while n >= 1024.0 && i < units.len() - 1 {
+        n /= 1024.0;
+        i += 1;
+    }
+    if n < 10.0 && i > 0 {
+        format!("{n:.1}{}", units[i])
+    } else {
+        format!("{n:.0}{}", units[i])
+    }
 }
 
 fn ratio(a: Option<u64>, b: Option<u64>) -> Option<f32> {
@@ -275,6 +297,13 @@ pub fn start(shared: Weak<crate::core::Shared>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn traffic_rate_fits_under_the_icon() {
+        assert_eq!(compact_rate(512), "512B");
+        assert_eq!(compact_rate(1536), "1.5K");
+        assert_eq!(compact_rate(20 * 1024 * 1024), "20M");
+    }
 
     #[test]
     fn wire_roundtrip_and_invalid_values() {
