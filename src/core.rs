@@ -633,7 +633,7 @@ pub fn run(cfg: Config, sh: Arc<Shared>) {
 enum Msg {
     Dev(Vec<Ev>),
     FromPeer(u64, Frame),
-    Closed(u64),
+    Closed(u64, String),
     Input(Vec<Ev>),
     UsbOut(u64, u8, String),
     Takeover(u64, u16, Option<Side>),
@@ -1091,7 +1091,7 @@ fn authorize(
     result
 }
 
-fn send_clip_text(s: &mut Secure, share: bool, last: &mut String) -> io::Result<()> {
+fn send_clip_text(s: &mut impl std::io::Write, share: bool, last: &mut String) -> io::Result<()> {
     if !share {
         return Ok(());
     }
@@ -1104,6 +1104,7 @@ fn send_clip_text(s: &mut Secure, share: bool, last: &mut String) -> io::Result<
 
 fn end_session(sh: &Shared, inj: &Mutex<Injector>, r: io::Result<()>, session: u64) {
     if let Err(e) = r {
+        crate::connection::record(format!("session={session} ended ({:?}): {e}", e.kind()));
         if !sh.stopping() {
             sh.log(format!("Oturum bitti: {e}"));
         }
@@ -1392,15 +1393,19 @@ fn run_session(
     let (tx, rx): (Sender<Msg>, Receiver<Msg>) = mpsc::channel();
     SLOT.lock().unwrap().push((session, tx.clone()));
     let usb_tx = tx.clone();
-    let mut rs = s.try_clone()?;
-    thread::spawn(move || {
-        while let Ok(f) = read_frame(&mut rs) {
-            if tx.send(Msg::FromPeer(session, f)).is_err() {
-                return;
-            }
-        }
-        let _ = tx.send(Msg::Closed(session));
-    });
+    let closed = tx.clone();
+    let mut s = crate::connection::start(
+        s,
+        move |frame| tx.send(Msg::FromPeer(session, frame)).is_ok(),
+        move |reason| {
+            crate::connection::record(format!("session={session} transport: {reason}"));
+            let _ = closed.send(Msg::Closed(session, reason));
+        },
+    )?;
+    crate::connection::record(format!(
+        "session={session} peer={peer} ip={peer_ip} connected; build={}",
+        env!("CARGO_PKG_VERSION")
+    ));
 
     sh.peer_secrets
         .lock()
@@ -1462,7 +1467,7 @@ fn run_session(
     let mut incoming = crate::pointer::Incoming::new(local_scale);
     let mut pending: Option<Msg> = None;
 
-    let (mut last_rx, mut last_ping) = (Instant::now(), Instant::now());
+    let mut last_ping = Instant::now();
     let prefs_ok = pflags & flows::SUPPORTS_PREFS != 0 && pflags != 0xFF;
     if hardware_ok {
         write_frame(&mut s, &Frame::Device(hardware::LIST, Vec::new()))?;
@@ -1555,13 +1560,7 @@ fn run_session(
                     metrics_sent = Instant::now();
                 }
             }
-            write_frame(&mut s, &Frame::Ping)?;
             last_ping = Instant::now();
-        }
-        if last_rx.elapsed() > Duration::from_secs(5) {
-            return Err(io::Error::other(
-                "karşı PC yanıt vermiyor (kapanmış ya da ağ kopmuş olabilir)",
-            ));
         }
         let local_perms = sh.perms_for(&pid);
         for (i, allowed) in [local_perms.audio_out, local_perms.mic_out]
@@ -1788,8 +1787,8 @@ fn run_session(
             }
         }
         match msg {
-            Msg::Closed(id) if id == session => {
-                return Err(io::Error::other("karşı taraf bağlantıyı kapattı"));
+            Msg::Closed(id, reason) if id == session => {
+                return Err(io::Error::other(reason));
             }
             Msg::UsbOut(id, op, text) if id == session => {
                 write_frame(&mut s, &Frame::Usb(op, text))?
@@ -1797,13 +1796,8 @@ fn run_session(
             Msg::Input(evs) if screen2_ok && _screen_rx.is_some() => {
                 write_frame(&mut s, &Frame::ScreenInput(evs))?
             }
-            Msg::FromPeer(id, f) if id == session && not_for_us(&f, screen_mine, usb_mine) => {
-                last_rx = Instant::now();
-            }
-            Msg::FromPeer(id, f) if id == session => match {
-                last_rx = Instant::now();
-                f
-            } {
+            Msg::FromPeer(id, f) if id == session && not_for_us(&f, screen_mine, usb_mine) => {}
+            Msg::FromPeer(id, f) if id == session => match f {
                 Frame::Enter(..) if !sh.perms_for(&pid).control_in => {
                     let _ = write_frame(&mut s, &Frame::Reclaim);
                     sh.log("Karşı PC bu PC'yi yönetmek istedi ama ayarlarda kapalı.");
@@ -2272,7 +2266,7 @@ fn handle_usb(
     secret: &str,
     port: u16,
     client: &mut Option<usb::Tunnel>,
-    s: &mut Secure,
+    s: &mut impl std::io::Write,
 ) -> io::Result<()> {
     match op {
         usb::LIST_REQ => {
@@ -2879,7 +2873,7 @@ mod tests {
             )
             .unwrap();
             let _ = read_frame(&mut sec).unwrap();
-            thread::sleep(Duration::from_secs(9));
+            thread::sleep(Duration::from_secs(20));
         });
         let (s, from) = l.accept().unwrap();
         let lookup = |_: u8, _: &str| Some("ortak-parola-1234".to_string());
@@ -2897,10 +2891,10 @@ mod tests {
         let dt = t0.elapsed();
         assert!(r.is_err(), "oturum hata ile bitmeli");
         assert!(
-            dt < Duration::from_secs(8),
-            "5 sn sessizlikte düşmeli, {dt:?} sürdü"
+            dt < Duration::from_secs(18),
+            "15 sn sessizlikte düşmeli, {dt:?} sürdü"
         );
-        assert!(dt >= Duration::from_secs(4), "çok erken düştü: {dt:?}");
+        assert!(dt >= Duration::from_secs(14), "çok erken düştü: {dt:?}");
         end_session(&sh, &inj, r, 1);
         freezer.join().unwrap();
     }

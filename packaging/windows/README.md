@@ -106,3 +106,9 @@ Smoke testi yerelde sistem kurulumu yapacağından açıkça izin verilmeden ça
 Yerel doğrulama: release ve setup derlendi; güncelleyicinin setup tercihi, eski ZIP uyumluluğu ve sürüm karşılaştırması testleri geçti. PowerShell betikleri, workflow YAML ve format kontrolü doğrulandı. Genel Windows test koşusunda bu değişiklikte düzenlenmeyen ağ/tünel/DHT testlerinde hatalar görüldü; `deadline_terminates_an_incomplete_packet` takıldığı için koşu durduruldu. Bu nedenle genel testlerin veya GitHub CI'nin tamamı başarılı sayılmamalıdır. Gerçek kurulum/güncelleme/kaldırma smoke testi CI koşusunu bekler; USB sürücüleri bu bilgisayara kurulmadı.
 
 Lisanslar ve USB sunucusunun sabit sürüm kaynak arşivi `licenses` klasörüne kurulur. Ayrıntılar: [THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Bağlantı kopmalarının takibi
+
+Kontrol bağlantısının yoklama gönderimi ve veri alım takibi, ses/ekran başlatma işlemlerinden bağımsız çalışır. Yanıt süresi uygulamanın olay kuyruğu yerine ağdan gerçekten alınan çerçevelerle ölçülür; 15 saniye boyunca kontrol verisi gelmezse oturum kapatılır. Her iki bilgisayarın da güncellenmesi önerilir.
+
+Windows'ta bağlantı başlangıcı ve ayrıntılı kapanma nedenleri `%APPDATA%\mause\connection.log` dosyasına yazılır. Önceki kayıt `connection.previous.log` olarak saklanır; her dosya yaklaşık 512 KiB ile sınırlıdır. Dosya içerikleri ve parolalar bu günlüğe yazılmaz.

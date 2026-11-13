@@ -18,6 +18,7 @@ mod clip;
 #[path = "clip_stub.rs"]
 mod clip;
 mod config;
+mod connection;
 mod core;
 mod design;
 mod discover;
