@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-pub const PORT: u16 = 24807;
+pub const PORT: u16 = 24808;
+pub const LEGACY_PORT: u16 = 24807;
 const USBIP_PORT: u16 = 3240;
 
 pub const LIST_REQ: u8 = 0;
@@ -16,6 +17,7 @@ pub const ATTACH: u8 = 2;
 pub const READY: u8 = 3;
 pub const FAIL: u8 = 4;
 pub const DETACH: u8 = 5;
+pub const ATTACHED: u8 = 6;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Dev {
@@ -363,8 +365,9 @@ mod os {
         elevated(&format!("unbind --busid {busid}"))
     }
 
-    pub fn attach(_: SocketAddr, busid: &str) -> Result<(), String> {
-        run(cmd(&usbip()).args(["attach", "-r", "127.0.0.2", "-b", busid])).map(drop)
+    pub fn attach(local: SocketAddr, busid: &str) -> Result<(), String> {
+        let args = super::windows_attach_args(local, busid)?;
+        run(cmd(&usbip()).args(args)).map(drop)
     }
 
     pub fn detach(busid: &str) -> Result<(), String> {
@@ -374,7 +377,7 @@ mod os {
     }
 
     pub fn local_addr() -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 2], USBIP_PORT))
+        SocketAddr::from(([127, 0, 0, 1], 0))
     }
 }
 
@@ -413,6 +416,23 @@ mod os {
 #[cfg(target_os = "linux")]
 pub use os::{access_ready, configure_access};
 pub use os::{attach, bind, detach, install_tools, list_local, tools, unbind};
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_attach_args(local: SocketAddr, busid: &str) -> Result<Vec<String>, String> {
+    if !local.ip().is_loopback() || local.port() < 1024 || !valid_busid(busid) {
+        return Err("USB yalnız yerel şifreli tünel üzerinden bağlanabilir.".into());
+    }
+    Ok(vec![
+        "--tcp-port".into(),
+        local.port().to_string(),
+        "attach".into(),
+        "--remote".into(),
+        local.ip().to_string(),
+        "--bus-id".into(),
+        busid.into(),
+        "--once".into(),
+    ])
+}
 
 fn port_of(text: &str, busid: &str) -> Option<String> {
     let mut port = None;
@@ -474,9 +494,9 @@ fn listen(
     Ok(local)
 }
 
-pub fn serve(peer_ip: String, secret: String) -> io::Result<Tunnel> {
+pub fn serve(peer_ip: String, secret: String, port: u16) -> io::Result<Tunnel> {
     serve_on(
-        TcpListener::bind(("0.0.0.0", PORT))?,
+        TcpListener::bind(("0.0.0.0", port))?,
         peer_ip,
         secret,
         SocketAddr::from(([127, 0, 0, 1], USBIP_PORT)),
@@ -511,8 +531,8 @@ fn serve_on(
     Ok(Tunnel { stop, local })
 }
 
-pub fn connect(peer_ip: String, secret: String) -> io::Result<Tunnel> {
-    let peer = format!("{peer_ip}:{PORT}")
+pub fn connect(peer_ip: String, secret: String, port: u16) -> io::Result<Tunnel> {
+    let peer = format!("{peer_ip}:{port}")
         .parse()
         .map_err(io::Error::other)?;
     connect_on(TcpListener::bind(os::local_addr())?, peer, secret)
@@ -541,6 +561,54 @@ fn connect_on(l: TcpListener, peer: SocketAddr, secret: String) -> io::Result<Tu
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+
+    #[test]
+    fn windows_import_uses_ephemeral_tunnel_port_and_no_background_retry() {
+        let local: SocketAddr = "127.0.0.1:45001".parse().unwrap();
+        let args = windows_attach_args(local, "2-1").unwrap();
+        assert_eq!(&args[..3], &["--tcp-port", "45001", "attach"]);
+        assert!(args.iter().any(|a| a == "--once"));
+        assert!(windows_attach_args("192.0.2.1:45001".parse().unwrap(), "2-1").is_err());
+        assert!(windows_attach_args(local, "2-1;bad").is_err());
+        assert_ne!(PORT, crate::hardware::CAMERA_PORT);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "requires running usbipd and installed USBip client; lists devices only"]
+    fn installed_windows_client_lists_devices_through_encrypted_tunnel() {
+        let server = serve_on(
+            TcpListener::bind("127.0.0.1:0").unwrap(),
+            "127.0.0.1".into(),
+            "test-usb-secret".into(),
+            "127.0.0.1:3240".parse().unwrap(),
+        )
+        .unwrap();
+        let client = connect_on(
+            TcpListener::bind(os::local_addr()).unwrap(),
+            server.local,
+            "test-usb-secret".into(),
+        )
+        .unwrap();
+        assert_ne!(client.local.port(), USBIP_PORT);
+        let exe = std::path::Path::new(r"C:\Program Files\USBip\usbip.exe");
+        let result = Command::new(exe)
+            .args([
+                "--tcp-port",
+                &client.local.port().to_string(),
+                "list",
+                "-r",
+                "127.0.0.1",
+            ])
+            .output()
+            .unwrap();
+        println!(
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(result.status.success());
+    }
 
     #[test]
     fn liste_gidip_gelir_ve_tehlikeli_busid_elenir() {

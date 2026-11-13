@@ -1,5 +1,59 @@
 # Windows setup
 
+## Dosya ve klasör aktarımı
+
+Dosyalar sayfasında klasörü tek tıklamayla seçip **Gönder** veya **Al** düğmesine
+basın. Sağ tık menüsü ve sürükle-bırak da klasörleri destekler. Çift tıklama
+klasörü açmaya devam eder. Panodaki dosyaları ekran geçişinde taşıma seçeneği
+açıkken klasörler de taşınabilir.
+
+Alt klasörler, boş klasörler ve gizli dosyalar korunur. Klasör içeriği tek
+şifreli bağlantıda aktarılır; kullanıcıdan ZIP oluşturması istenmez. Hedefte
+aynı adlı öğe varsa ayrı bir ad seçilir. Kesilen aktarımın geçici içeriği
+temizlenir. Sembolik bağlantılar, Windows junction/reparse öğeleri ve özel
+dosyalar takip edilmez; bunları içeren aktarım açık bir hata verir.
+Klasör aktarımı için iki PC de bu özelliği içeren güncel Mause kullanmalıdır.
+
+## Performans göstergeleri ve USB
+
+Ayarlar → **Performans göstergeleri** bölümünde bu PC'nin toplam kullanım
+verilerini paylaşma ve bağlı PC'lerin verilerini gösterme ayrı ayrı açılır.
+İkisi de varsayılan olarak kapalıdır. İşlemci, RAM, GPU, disk ve ağ ikonları
+ayrı ayrı seçilebilir; ikonların üzerine gelince kullanım ve aktarım hızları
+görünür. Veriler yaklaşık iki saniyede bir şifreli bağlantı üzerinden gönderilir.
+GPU değeri birden fazla GPU varsa en yoğun GPU'nun kullanımıdır; bellek ve
+disk değerleri toplamdır. Ağ değerleri anlık trafik hızlarıdır, internet hız
+testi değildir. Desteklenmeyen veya eski ölçümler sayı yerine ‘—’ gösterir.
+Küçük cihaz kartlarında ikon satırı yer yoksa gösterilmez.
+
+USB aktarımında iki PC de güncel Mause kullanmalıdır. Yeni USB tüneli TCP
+24808 kullanır; kamera akışı 24807'de kalır. Windows istemcisinin yerel ucu
+boş bir loopback portu seçer, böylece usbipd servisinin 3240 portuyla çakışmaz.
+Takma hataları ana PC bağlantısını düşürmez ve başarısız takma işlemi arka
+planda sürekli tekrarlanmaz. Cihaz ancak istemci takmayı doğrulayınca takılı
+gösterilir. Kaynak PC'deki cihaz listeleme ve hazırlama işlemleri ana bağlantı
+döngüsünü bekletmez.
+
+## Ek monitör ve mevcut ekran
+
+İki PC'ye de güncel Mause kurulmalıdır. Masaüstü genişletilecek Windows PC'de
+Ayarlar → Ekran paylaşımı → **Sanal ekran sürücüsünü kur** seçilir. Bu bir kerelik
+işlem internet ve yönetici onayı ister; SHA256 özeti sabitlenmiş, SignPath imzalı
+Virtual Display Driver 25.7.23 paketini resmi projesinden indirir. Mevcut sürücü
+ve ayarları korunur; imza denetimi veya test-signing ayarları değiştirilmez.
+
+Diğer PC'de Ekran izleme penceresinden **Ek monitör** ve çözünürlük seçilir.
+Windows masaüstü sanal ekrana genişler; pencereler bu ekrana taşınabilir.
+**Tam ekran** düğmesi izleme penceresini monitör gibi kullanmayı sağlar.
+**Mevcut ekranı izle** seçeneği ve ekran listesi ana/fiziksel ekranı gösterir.
+Modlar paylaşım sırasında değiştirilebilir. Paylaşım kapanınca önceki ekran
+düzeni geri yüklenir. Mause zorla sonlandırılırsa Windows görüntü ayarlarından
+sanal ekranı kapatmak gerekebilir. Sanal ekranı Windows'un ana ekranı yapmak
+desteklenmez; fiziksel ana ekran korunur.
+
+Sürücü isteğe bağlıdır; standart Mause kurulum paketine gömülmez. Kaynak kodu
+ve MIT lisansı: https://github.com/VirtualDrivers/Virtual-Display-Driver
+
 Windows dağıtımının ana çıktısı `mause-v<sürüm>-windows-x86_64-setup.exe` dosyasıdır. Windows 10 1903+ / Windows 11 x64 içindir; ARM64 kurulum paketi bu akışta üretilmez.
 
 ## Kullanıcı kurulumu
@@ -52,3 +106,9 @@ Smoke testi yerelde sistem kurulumu yapacağından açıkça izin verilmeden ça
 Yerel doğrulama: release ve setup derlendi; güncelleyicinin setup tercihi, eski ZIP uyumluluğu ve sürüm karşılaştırması testleri geçti. PowerShell betikleri, workflow YAML ve format kontrolü doğrulandı. Genel Windows test koşusunda bu değişiklikte düzenlenmeyen ağ/tünel/DHT testlerinde hatalar görüldü; `deadline_terminates_an_incomplete_packet` takıldığı için koşu durduruldu. Bu nedenle genel testlerin veya GitHub CI'nin tamamı başarılı sayılmamalıdır. Gerçek kurulum/güncelleme/kaldırma smoke testi CI koşusunu bekler; USB sürücüleri bu bilgisayara kurulmadı.
 
 Lisanslar ve USB sunucusunun sabit sürüm kaynak arşivi `licenses` klasörüne kurulur. Ayrıntılar: [THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Bağlantı kopmalarının takibi
+
+Kontrol bağlantısının yoklama gönderimi ve veri alım takibi, ses/ekran başlatma işlemlerinden bağımsız çalışır. Yanıt süresi uygulamanın olay kuyruğu yerine ağdan gerçekten alınan çerçevelerle ölçülür; 15 saniye boyunca kontrol verisi gelmezse oturum kapatılır. Her iki bilgisayarın da güncellenmesi önerilir.
+
+Windows'ta bağlantı başlangıcı ve ayrıntılı kapanma nedenleri `%APPDATA%\mause\connection.log` dosyasına yazılır. Önceki kayıt `connection.previous.log` olarak saklanır; her dosya yaklaşık 512 KiB ile sınırlıdır. Dosya içerikleri ve parolalar bu günlüğe yazılmaz.

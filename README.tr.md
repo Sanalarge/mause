@@ -23,6 +23,7 @@ Mause; aynı ağdaki bilgisayarları ve Android cihazları tek klavye ve fareyle
 | --- | --- |
 | Kesintisiz giriş | Klavye ve fareyi Windows, macOS, Linux ve Android cihazlarla paylaşır. |
 | Ekran yerleşimi | Cihazları konumlandırır, imleci ekran kenarından geçirerek geçiş yapar. |
+| Bilgisayara özel ayarlar | Bağlanan PC'yi kimliğinden tanır; kayıtlı yerleşimini ve paylaşım ayarlarını otomatik geri yükler. Aynı konumdaki PC'ler birlikte bağlanınca yan yana yerleştirilir. |
 | Güvenli eşleştirme | Bağlantıya güvenmeden önce iki cihazda aynı kodu onaylatır. |
 | Şifreli taşıma | Eşleşmiş cihaz trafiğini uçtan uca şifreler. |
 | Pano ve dosyalar | Metin ve dosyaları eşleşmiş bilgisayarlar arasında taşır. |

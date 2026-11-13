@@ -19,6 +19,8 @@ pub const SUPPORTS_SCREEN2: u32 = 1 << 13;
 pub const SUPPORTS_USB: u32 = 1 << 12;
 pub const SUPPORTS_VERSION: u32 = 1 << 11;
 pub const SUPPORTS_HARDWARE: u32 = 1 << 10;
+pub const SUPPORTS_METRICS: u32 = 1 << 16;
+pub const SUPPORTS_USB2: u32 = 1 << 17;
 pub const SCREEN_OUT: u16 = 1 << 9;
 
 impl Pref {

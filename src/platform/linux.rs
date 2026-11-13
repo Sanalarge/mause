@@ -766,3 +766,130 @@ mod tests {
         println!("okunamayan: {missing:?}");
     }
 }
+
+pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{
+        AtomEnum, ChangeWindowAttributesAux, ConnectionExt, CreateWindowAux, PropMode, WindowClass,
+    };
+    use x11rb::wrapper::ConnectionExt as _;
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    if super::wayland::active() && super::wayland_flash::show(x, y, w, h).is_ok() {
+        return;
+    }
+    let Ok((conn, n)) = x11rb::connect(None) else {
+        return;
+    };
+    let screen = &conn.setup().roots[n];
+    let Ok(win) = conn.generate_id() else {
+        return;
+    };
+    let aux = CreateWindowAux::new()
+        .override_redirect(1)
+        .background_pixel(super::FLASH_COLORS[0]);
+    let made = conn.create_window(
+        screen.root_depth,
+        win,
+        screen.root,
+        x as i16,
+        y as i16,
+        w as u16,
+        h as u16,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        screen.root_visual,
+        &aux,
+    );
+    if made.is_err() {
+        return;
+    }
+    let _ = x11rb::protocol::shape::ConnectionExt::shape_rectangles(
+        &conn,
+        x11rb::protocol::shape::SO::SET,
+        x11rb::protocol::shape::SK::INPUT,
+        x11rb::protocol::xproto::ClipOrdering::UNSORTED,
+        win,
+        0,
+        0,
+        &[],
+    );
+    let atom = |name: &[u8]| {
+        conn.intern_atom(false, name)
+            .ok()?
+            .reply()
+            .ok()
+            .map(|r| r.atom)
+    };
+    if let Some(hints) = atom(b"WM_HINTS") {
+        let _ = conn.change_property32(
+            PropMode::REPLACE,
+            win,
+            hints,
+            hints,
+            &[1, 0, 0, 0, 0, 0, 0, 0, 0],
+        );
+    }
+    if let (Some(state), Some(above)) = (atom(b"_NET_WM_STATE"), atom(b"_NET_WM_STATE_ABOVE")) {
+        let _ = conn.change_property32(PropMode::REPLACE, win, state, AtomEnum::ATOM, &[above]);
+    }
+    if conn.map_window(win).is_err() {
+        return;
+    }
+    for step in 0..super::FLASH_STEPS {
+        let color = super::FLASH_COLORS[step as usize % 2];
+        let _ = conn.change_window_attributes(
+            win,
+            &ChangeWindowAttributesAux::new().background_pixel(color),
+        );
+        let _ = conn.clear_area(false, win, 0, 0, 0, 0);
+        let _ = conn.flush();
+        std::thread::sleep(std::time::Duration::from_millis(super::FLASH_STEP_MS));
+    }
+    let _ = conn.destroy_window(win);
+    let _ = conn.flush();
+}
+
+pub fn ui_scale() -> f32 {
+    static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        if super::wayland::active() || detect_screen().is_some() {
+            return 1.0;
+        }
+        if let Some(v) = std::env::var("GDK_SCALE")
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
+        {
+            return v.clamp(0.5, 4.0);
+        }
+        xft_dpi().map_or(1.0, |d| (d / 96.0).clamp(0.5, 4.0))
+    })
+}
+
+fn xft_dpi() -> Option<f32> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+    let (conn, n) = x11rb::connect(None).ok()?;
+    let root = conn.setup().roots[n].root;
+    let reply = conn
+        .get_property(
+            false,
+            root,
+            AtomEnum::RESOURCE_MANAGER,
+            AtomEnum::STRING,
+            0,
+            1 << 20,
+        )
+        .ok()?
+        .reply()
+        .ok()?;
+    parse_xft_dpi(&String::from_utf8_lossy(&reply.value))
+}
+
+pub(super) fn parse_xft_dpi(db: &str) -> Option<f32> {
+    db.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        (k.trim() == "Xft.dpi").then(|| v.trim().parse().ok())?
+    })
+}

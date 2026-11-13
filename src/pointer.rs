@@ -15,6 +15,7 @@ pub struct Gain {
     speed: f32,
     last_send: Option<Instant>,
     remainder: (f32, f32),
+    out_scale: f32,
 }
 
 impl Default for Gain {
@@ -34,6 +35,7 @@ impl Gain {
             speed: 0.0,
             last_send: None,
             remainder: (0.0, 0.0),
+            out_scale: 1.0,
         }
     }
 
@@ -91,7 +93,11 @@ impl Gain {
         (0..BUCKETS)
             .filter(|&i| self.seen[i])
             .min_by_key(|&i| i.abs_diff(index))
-            .map_or(1.0, |i| self.table[i])
+            .map_or_else(|| fallback(index), |i| self.table[i])
+    }
+
+    pub fn set_local_scale(&mut self, scale: f32) {
+        self.out_scale = 1.0 / scale.clamp(0.5, 4.0);
     }
 
     pub fn describe(&self) -> String {
@@ -129,9 +135,40 @@ impl Gain {
                 instant
             }
         };
-        let gain = self.gain(bucket(self.speed));
+        let gain = self.gain(bucket(self.speed)) * self.out_scale;
         let fx = dx as f32 * gain + self.remainder.0;
         let fy = dy as f32 * gain + self.remainder.1;
+        let (sx, sy) = (fx.round(), fy.round());
+        self.remainder = (fx - sx, fy - sy);
+        replace_motion(evs, sx as i32, sy as i32);
+    }
+}
+
+fn fallback(index: usize) -> f32 {
+    const CURVE: [f32; BUCKETS] = [1.0, 1.0, 1.15, 1.4, 1.75, 2.1, 2.4, 2.6];
+    CURVE[index]
+}
+
+pub struct Incoming {
+    scale: f32,
+    remainder: (f32, f32),
+}
+
+impl Incoming {
+    pub fn new(scale: f32) -> Self {
+        Self {
+            scale: scale.clamp(0.5, 4.0),
+            remainder: (0.0, 0.0),
+        }
+    }
+
+    pub fn apply(&mut self, evs: &mut Vec<Ev>) {
+        let (dx, dy) = motion(evs);
+        if (dx == 0 && dy == 0) || self.scale == 1.0 {
+            return;
+        }
+        let fx = dx as f32 * self.scale + self.remainder.0;
+        let fy = dy as f32 * self.scale + self.remainder.1;
         let (sx, sy) = (fx.round(), fy.round());
         self.remainder = (fx - sx, fy - sy);
         replace_motion(evs, sx as i32, sy as i32);
@@ -194,11 +231,29 @@ mod tests {
     }
 
     #[test]
-    fn ogrenilmemis_kazanc_hareketi_degistirmez() {
+    fn ogrenilmemis_yavas_hareket_degismez() {
         let mut gain = Gain::new();
-        let mut evs = moves(7, -3);
+        let mut evs = moves(1, -1);
         gain.scale(&mut evs);
-        assert_eq!(motion(&evs), (7, -3));
+        assert_eq!(motion(&evs), (1, -1));
+    }
+
+    #[test]
+    fn olcek_farki_hizi_esitler() {
+        let mut gain = Gain::new();
+        gain.learn(0, 1.0);
+        gain.set_local_scale(2.0);
+        let mut evs = moves(10, 0);
+        gain.scale_at(&mut evs, Instant::now());
+        assert_eq!(motion(&evs), (5, 0));
+        let mut inc = Incoming::new(1.5);
+        let mut total = 0;
+        for _ in 0..4 {
+            let mut e = moves(1, 0);
+            inc.apply(&mut e);
+            total += motion(&e).0;
+        }
+        assert_eq!(total, 6);
     }
 
     #[test]

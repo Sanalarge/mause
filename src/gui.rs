@@ -245,6 +245,8 @@ struct App {
     camera: Option<CameraView>,
     torch_on: HashSet<String>,
     vcam_note: Arc<Mutex<Option<String>>>,
+    #[cfg(target_os = "windows")]
+    vdisplay_note: Arc<Mutex<Option<String>>>,
     screen_ctrl: bool,
     screen_mods: [bool; 4],
     screen_down: Vec<u16>,
@@ -324,6 +326,8 @@ impl App {
             camera: None,
             torch_on: HashSet::new(),
             vcam_note: Arc::default(),
+            #[cfg(target_os = "windows")]
+            vdisplay_note: Arc::default(),
             screen_ctrl: false,
             screen_mods: [false; 4],
             screen_down: Vec::new(),
@@ -337,8 +341,29 @@ impl App {
         app
     }
 
-    fn sync_perms(&self) {
+    fn sync_perms(&mut self) {
+        if !self.cfg.active_peer.is_empty() {
+            let bits = flows::bits(&self.cfg)
+                | if self.cfg.allow_screen_out {
+                    flows::SCREEN_OUT
+                } else {
+                    0
+                };
+            let id = self.cfg.active_peer.clone();
+            self.cfg.device_perms.retain(|(i, _)| *i != id);
+            self.cfg.device_perms.push((id.clone(), bits));
+            if let Some(sh) = &self.shared {
+                sh.device_perms.lock().unwrap().insert(id, bits);
+            }
+        }
         if let Some(sh) = &self.shared {
+            sh.metrics_share
+                .store(self.cfg.share_metrics, Ordering::Relaxed);
+            sh.metrics_show
+                .store(self.cfg.show_metrics, Ordering::Relaxed);
+            if !self.cfg.show_metrics {
+                sh.metrics_peer.lock().unwrap().clear();
+            }
             *sh.perms.lock().unwrap() = Perms::from_cfg(&self.cfg);
             sh.remote_prefs
                 .store(self.cfg.allow_remote_prefs, Ordering::Relaxed);
@@ -367,6 +392,12 @@ impl App {
         self.cfg.trusted.retain(|(trusted, _)| trusted != id);
         self.cfg.held.retain(|held| held != id);
         self.cfg.unplace(id);
+        self.cfg.peer_profiles.retain(|(i, _)| i != id);
+        self.cfg.device_perms.retain(|(i, _)| i != id);
+        if self.cfg.active_peer == id {
+            self.cfg.activate_peer("");
+            self.cfg.peer_profiles.retain(|(i, _)| i != id);
+        }
         if let Some(sh) = &self.shared {
             sh.pairs.lock().unwrap().remove(id);
         }
@@ -519,12 +550,13 @@ impl App {
         if let Some(sh) = &self.shared {
             sh.apply_pref(pref, on);
         }
-        self.cfg.save();
+        self.sync_perms();
     }
 
     fn toggle_flow(&mut self, flow: Flow, on: bool) {
         let peer = self.peer_prefs();
-        self.toggle_flow_for("", flow, on, peer);
+        let id = self.cfg.active_peer.clone();
+        self.toggle_flow_for(&id, flow, on, peer);
     }
 
     fn device_bits(&self, id: &str) -> u16 {
@@ -546,6 +578,13 @@ impl App {
         let bits = if on { bits | bit } else { bits & !bit };
         self.cfg.device_perms.retain(|(d, _)| d != id);
         self.cfg.device_perms.push((id.to_owned(), bits));
+        if self.cfg.active_peer == id {
+            if let Some(pref) = Pref::ALL.into_iter().find(|pref| pref.bit() == bit) {
+                flows::set(&mut self.cfg, pref, on);
+            } else if bit == flows::SCREEN_OUT {
+                self.cfg.allow_screen_out = on;
+            }
+        }
         if let Some(sh) = &self.shared {
             sh.device_perms.lock().unwrap().insert(id.to_owned(), bits);
         }
@@ -555,9 +594,7 @@ impl App {
     fn toggle_flow_for(&mut self, id: &str, flow: Flow, on: bool, peer: Option<u16>) {
         for (at, pref, value) in flow.sync_changes(on) {
             match at {
-                Where::Local if !id.is_empty() && !matches!(pref, Pref::RelayIn | Pref::MicIn) => {
-                    self.set_device_pref(id, pref.bit(), value)
-                }
+                Where::Local if !id.is_empty() => self.set_device_pref(id, pref.bit(), value),
                 Where::Local => self.set_pref(pref, value),
                 Where::Remote => {
                     if let (Some(sh), Some(bits)) = (&self.shared, peer) {
@@ -590,6 +627,12 @@ impl App {
             .collect();
         if !changed.is_empty() {
             for (id, bits) in changed {
+                if self.cfg.active_peer == id {
+                    for pref in Pref::ALL {
+                        flows::set(&mut self.cfg, pref, bits & pref.bit() != 0);
+                    }
+                    self.cfg.allow_screen_out = bits & flows::SCREEN_OUT != 0;
+                }
                 self.cfg.device_perms.retain(|(d, _)| *d != id);
                 self.cfg.device_perms.push((id, bits));
             }
@@ -603,6 +646,70 @@ impl App {
             flows::set(&mut self.cfg, pref, on);
         }
         self.cfg.save();
+    }
+
+    fn absorb_connected_peer(&mut self) {
+        if self.sync_connected_peer() {
+            self.cfg.save();
+        }
+        if let Some(sh) = &self.shared {
+            *sh.config.lock().unwrap() = Some(self.cfg.clone());
+        }
+    }
+
+    fn sync_connected_peer(&mut self) -> bool {
+        let Some(sh) = self.shared.clone() else {
+            return false;
+        };
+        let links = sh.links.lock().unwrap().clone();
+        let selected = sh.primary_link().map(|l| l.id).unwrap_or_default();
+        let profile_changed = self.cfg.activate_peer(&selected);
+        let mut changed = profile_changed;
+        for link in &links {
+            if link.id.is_empty() {
+                continue;
+            }
+            if self.cfg.side_of(&link.id).is_none() {
+                self.cfg.place(&link.id, link.side, &link.parent);
+                changed = true;
+            }
+            for (id, name) in &mut self.cfg.trusted {
+                if *id == link.id && !link.name.is_empty() && *name != link.name {
+                    *name = link.name.clone();
+                    changed = true;
+                }
+            }
+            for (id, name, _) in &mut self.cfg.paired {
+                if *id == link.id && !link.name.is_empty() && *name != link.name {
+                    *name = link.name.clone();
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            sh.apply_connection_settings(&self.cfg);
+        }
+        if profile_changed {
+            self.screen_tex = None;
+            self.peer_files = None;
+            *self.remote.lock().unwrap() = Pane::default();
+            for (kind, selected, devices) in [
+                (Kind::Sink, &self.cfg.audio_sink, &self.audio.sinks),
+                (Kind::Source, &self.cfg.audio_source, &self.audio.sources),
+            ] {
+                if !selected.is_empty() && devices.iter().any(|d| d.name == *selected) {
+                    audio::set_default(kind, selected);
+                }
+            }
+        }
+        if self
+            .popup_device
+            .as_ref()
+            .is_some_and(|id| !links.iter().any(|l| l.key() == *id))
+        {
+            self.popup_device = None;
+        }
+        changed
     }
 
     fn peer_prefs(&self) -> Option<u16> {
@@ -1016,6 +1123,14 @@ fn section(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::U
 }
 
 fn stream_controls(ui: &mut egui::Ui, id: &str, o: &mut screen::Opts) {
+    egui::ComboBox::from_id_salt((id, "display_mode"))
+        .selected_text(if o.extend.is_some() { "Ek monitör olarak kullan" } else { "Mevcut ekranı izle" })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut o.extend, None, "Mevcut ekranı izle");
+            for (size, label) in [((1920, 1080), "Ek monitör: 1920×1080"), ((2560, 1440), "Ek monitör: 2560×1440"), ((3840, 2160), "Ek monitör: 3840×2160")] {
+                ui.selectable_value(&mut o.extend, Some(size), label);
+            }
+        }).response.on_hover_text("Ek monitör modunda, ekranını izlediğiniz PC'nin masaüstü bu pencereye genişletilir. Windows'ta ekranı paylaşılan PC'ye sanal ekran sürücüsü kurulmalıdır.");
     let pick = |ui: &mut egui::Ui, key: &str, value: &mut u16, choices: &[(u16, &str)]| {
         let current = choices
             .iter()
@@ -1115,14 +1230,7 @@ enum LayoutAction {
 
 const STRIP: f32 = 62.0;
 
-fn step(cell: (i32, i32), side: Side) -> (i32, i32) {
-    match side {
-        Side::Left => (cell.0 - 1, cell.1),
-        Side::Right => (cell.0 + 1, cell.1),
-        Side::Top => (cell.0, cell.1 - 1),
-        Side::Bottom => (cell.0, cell.1 + 1),
-    }
-}
+use crate::layout::step;
 
 fn link_points(
     from: egui::Rect,
@@ -1243,6 +1351,7 @@ fn monitor(
     sub: &str,
     sub_color: Color32,
     border: Color32,
+    performance: bool,
 ) {
     let neck = egui::Rect::from_min_size(
         egui::pos2(screen.center().x - 5.0, screen.bottom()),
@@ -1273,13 +1382,13 @@ fn monitor(
     painter.galley(
         egui::pos2(
             screen.center().x - galley.size().x / 2.0,
-            screen.center().y - 20.0,
+            screen.center().y - if performance { 0.0 } else { 20.0 },
         ),
         galley,
         palette.ink,
     );
     painter.text(
-        screen.center() + Vec2::new(0.0, 10.0),
+        screen.center() + Vec2::new(0.0, if performance { 22.0 } else { 10.0 }),
         Align2::CENTER_CENTER,
         sub,
         FontId::proportional(12.0),
@@ -1360,10 +1469,10 @@ impl Pane {
         list
     }
 
-    fn selected_files(&self) -> Vec<String> {
+    fn selected_items(&self) -> Vec<String> {
         self.entries
             .iter()
-            .filter(|e| !e.dir && self.selected.contains(&e.name))
+            .filter(|e| self.selected.contains(&e.name))
             .map(|e| e.name.clone())
             .collect()
     }
@@ -1703,7 +1812,7 @@ fn file_pane(
     let mut action = None;
     let usable = head.note.is_none();
     let in_disks = pane.path == transfer::DISKS || pane.path.is_empty();
-    let files = pane.selected_files();
+    let files = pane.selected_items();
     let outer = ui.max_rect();
     ui.set_width(ui.available_width());
 
@@ -1802,9 +1911,9 @@ fn file_pane(
                 (false, false) => "Gönder".to_owned(),
             };
             let tip = if head.remote {
-                "Seçili dosyaları bu bilgisayarda açık klasöre indir"
+                "Seçili dosya ve klasörleri bu bilgisayara al"
             } else {
-                "Seçili dosyaları karşıda açık klasöre gönder"
+                "Seçili dosya ve klasörleri karşıya gönder"
             };
             if transfer_key(ui, &label, head.remote, usable && head.can_act && count > 0)
                 .on_hover_text(tip)
@@ -1985,7 +2094,7 @@ fn file_pane(
                     if e.dir && ui.button("Aç").clicked() {
                         action = Some(PaneAction::Open(pane.path.clone(), e.name.clone()));
                     }
-                    let files = pane.selected_files();
+                    let files = pane.selected_items();
                     let verb = if head.remote {
                         "Bu bilgisayara al"
                     } else {
@@ -2513,6 +2622,7 @@ impl eframe::App for App {
         }
         self.absorb_learned();
         self.absorb_remote_prefs();
+        self.absorb_connected_peer();
         self.tray_tick(ctx);
         if self.popup.is_some() || self.watching() {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
@@ -3235,7 +3345,157 @@ impl App {
         self.kvm_layout(ui, state, running);
     }
 
+    fn performance_visible(&self, rect: egui::Rect) -> bool {
+        self.cfg.show_metrics
+            && self.cfg.metrics_mask != 0
+            && rect.height() >= 84.0
+            && rect.width() >= 110.0
+    }
+
+    fn performance_row(
+        &self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        palette: Palette,
+        rect: egui::Rect,
+        peer: Option<&str>,
+    ) {
+        if !self.performance_visible(rect) {
+            return;
+        }
+        let sample = self
+            .shared
+            .as_ref()
+            .and_then(|sh| match peer {
+                Some(id) => sh.metrics_peer.lock().unwrap().get(id).cloned(),
+                None => sh.metrics_local.lock().unwrap().clone(),
+            })
+            .filter(|s| s.at.elapsed() < Duration::from_secs(6));
+        let count = self.cfg.metrics_mask.count_ones() as f32;
+        let cell = ((rect.width() - 20.0) / count).min(34.0);
+        let left = rect.center().x - count * cell / 2.0;
+        let mut column = 0;
+        for (category, name) in ["İşlemci", "RAM", "GPU", "Disk", "Ağ"].iter().enumerate() {
+            if self.cfg.metrics_mask & (1 << category) == 0 {
+                continue;
+            }
+            let center = egui::pos2(left + (column as f32 + 0.5) * cell, rect.top() + 15.0);
+            column += 1;
+            let value = sample.as_ref().and_then(|s| s.sample.ratio(category));
+            let color = if sample.is_none() {
+                palette.muted
+            } else if value.is_some_and(|v| v >= 0.9) {
+                palette.warn
+            } else {
+                palette.ink2
+            };
+            match category {
+                0 => {
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(center, Vec2::splat(8.0)),
+                        1,
+                        Stroke::new(1.2, color),
+                        StrokeKind::Inside,
+                    );
+                    for d in [-2.0, 2.0] {
+                        for side in [-1.0, 1.0] {
+                            painter.line_segment(
+                                [
+                                    center + Vec2::new(d, side * 4.0),
+                                    center + Vec2::new(d, side * 6.0),
+                                ],
+                                Stroke::new(1.0, color),
+                            );
+                            painter.line_segment(
+                                [
+                                    center + Vec2::new(side * 4.0, d),
+                                    center + Vec2::new(side * 6.0, d),
+                                ],
+                                Stroke::new(1.0, color),
+                            );
+                        }
+                    }
+                }
+                1 => {
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(center, Vec2::new(13.0, 7.0)),
+                        1,
+                        Stroke::new(1.0, color),
+                        StrokeKind::Inside,
+                    );
+                    for x in [-4.0, 0.0, 4.0] {
+                        painter.rect_filled(
+                            egui::Rect::from_center_size(
+                                center + Vec2::new(x, 0.0),
+                                Vec2::new(2.0, 3.0),
+                            ),
+                            0,
+                            color,
+                        );
+                    }
+                }
+                2 => {
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(center, Vec2::new(14.0, 9.0)),
+                        1,
+                        Stroke::new(1.0, color),
+                        StrokeKind::Inside,
+                    );
+                    painter.circle_stroke(center, 2.5, Stroke::new(1.0, color));
+                }
+                3 => {
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(center, Vec2::new(11.0, 13.0)),
+                        2,
+                        Stroke::new(1.0, color),
+                        StrokeKind::Inside,
+                    );
+                    painter.circle_stroke(
+                        center + Vec2::new(0.0, -1.0),
+                        3.0,
+                        Stroke::new(1.0, color),
+                    );
+                }
+                _ => design::icon(painter, center, Icon::Link, color, 14.0),
+            }
+            let label = value.map_or_else(
+                || {
+                    if sample.is_some() && category == 4 {
+                        "↕".into()
+                    } else {
+                        "—".into()
+                    }
+                },
+                |v| format!("{:.0}%", v * 100.0),
+            );
+            painter.text(
+                center + Vec2::new(0.0, 13.0),
+                Align2::CENTER_CENTER,
+                label,
+                FontId::proportional(9.0),
+                color,
+            );
+            let detail = sample.as_ref().map_or_else(|| if peer.is_some() { "Karşı PC performans paylaşımı kapalı, desteklenmiyor veya ölçüm bekleniyor.".to_owned() } else { "Ölçüm bekleniyor.".to_owned() }, |s| s.sample.detail(category));
+            let response = ui.interact(
+                egui::Rect::from_center_size(
+                    center + Vec2::new(0.0, 6.0),
+                    Vec2::new(cell - 2.0, 30.0),
+                ),
+                ui.scope_id()
+                    .with(("performance", peer.unwrap_or("local"), category)),
+                Sense::hover(),
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{name}: {detail}"))
+            });
+            response.on_hover_text(detail);
+        }
+    }
+
     fn kvm_layout(&mut self, ui: &mut egui::Ui, state: &State, running: bool) {
+        if ui.checkbox(&mut self.cfg.show_metrics, "Cihaz performanslarını göster").on_hover_text("İşlemci, RAM, GPU, disk ve ağ göstergeleri. Karşı PC de kendi performans paylaşımını açmalıdır.").changed() {
+            self.sync_perms();
+        }
         let palette = Palette::of(ui);
         let links: Vec<core::Link> = self
             .shared
@@ -3251,132 +3511,147 @@ impl App {
         let (min_y, max_y) = (ys.clone().min().unwrap_or(0), ys.max().unwrap_or(0));
         let (cols, rows) = ((max_x - min_x + 1) as f32, (max_y - min_y + 1) as f32);
 
-        let width = ui.available_width();
-        let aspect = (self.cfg.h as f32 / self.cfg.w.max(1) as f32).clamp(0.5, 0.75);
-        let (gap_x, gap_y, margin) = (88.0, 64.0, 52.0);
-        let mw = (width * 0.24)
-            .clamp(132.0, 190.0)
-            .min((width - 2.0 * margin - (cols - 1.0) * gap_x) / cols)
-            .max(90.0);
-        let screen = Vec2::new(mw, (mw * aspect).round());
-        let stand = 16.0;
-        let strip = if nodes.iter().any(|n| n.link.is_some()) {
-            STRIP
-        } else {
-            0.0
-        };
-        let monitor_h = screen.y + stand + strip;
-        let canvas_h =
-            (rows * monitor_h + (rows - 1.0) * gap_y + 2.0 * margin).max(monitor_h + 120.0);
-        let (canvas, _) = ui.allocate_exact_size(Vec2::new(width, canvas_h), Sense::hover());
-        let painter = ui.painter().clone();
-        painter.rect(
-            canvas,
-            16,
-            palette.inset,
-            Stroke::new(1.0, palette.rule_strong),
-            StrokeKind::Inside,
-        );
-        let dots = painter.with_clip_rect(canvas.shrink(2.0));
-        let mut y = canvas.top() + 14.0;
-        while y < canvas.bottom() {
-            let mut x = canvas.left() + 14.0;
-            while x < canvas.right() {
-                dots.circle_filled(egui::pos2(x, y), 1.0, palette.rule_strong);
-                x += 22.0;
-            }
-            y += 22.0;
-        }
-
-        let lift = Vec2::new(0.0, (stand + strip) / 2.0);
-        let foot_of = |key: &str| {
-            let has_strip = nodes.iter().any(|n| n.key == key && n.link.is_some());
-            Vec2::new(0.0, stand + if has_strip { STRIP } else { 0.0 })
-        };
-        let (mid_x, mid_y) = ((min_x + max_x) as f32 / 2.0, (min_y + max_y) as f32 / 2.0);
-        let rect_of = |cell: (i32, i32)| {
-            let at = canvas.center()
-                + Vec2::new(
-                    (cell.0 as f32 - mid_x) * (screen.x + gap_x),
-                    (cell.1 as f32 - mid_y) * (monitor_h + gap_y),
-                )
-                - lift;
-            egui::Rect::from_center_size(at, screen)
-        };
-        let cell_of = |key: &str| {
-            nodes
-                .iter()
-                .find(|n| n.key == key)
-                .map_or((0, 0), |n| n.cell)
-        };
-        let own = rect_of((0, 0));
-        monitor(
-            &painter,
-            palette,
-            own,
-            stand,
-            &self.cfg.name,
-            "Bu bilgisayar",
-            palette.ink2,
-            palette.rule_strong,
-        );
-
-        let mut action: Option<LayoutAction> = None;
-        for node in &nodes {
-            let from = rect_of(cell_of(&node.parent));
-            let to = rect_of(node.cell);
-            let feet = (foot_of(&node.parent), foot_of(&node.key));
-            let (a, b, edge) = link_points(from, to, node.side, feet);
-            let tone = node.tone;
-            if node.live {
-                painter.line_segment([a, b], Stroke::new(2.0, tone));
-            } else {
-                painter.extend(egui::Shape::dashed_line(
-                    &[a, b],
-                    Stroke::new(1.5, tone),
-                    6.0,
-                    5.0,
-                ));
-            }
-            let mid = a + (b - a) / 2.0;
-            painter.circle(mid, 15.0, palette.surface, Stroke::new(1.5, tone));
-            design::icon(&painter, mid, Icon::Share, tone, 15.0);
-            let inset = if matches!(node.side, Side::Left | Side::Right) {
-                Vec2::new(0.0, 12.0)
-            } else {
-                Vec2::new(12.0, 0.0)
-            };
-            painter.line_segment([edge[0] + inset, edge[1] - inset], Stroke::new(3.0, tone));
-            if let Some(a) = self.layout_device(ui, &painter, palette, to, stand, node) {
-                action = Some(a);
-            }
-        }
-
-        let anchors = std::iter::once((String::new(), String::new(), (0, 0), None)).chain(
-            nodes
-                .iter()
-                .filter(|n| !n.id.is_empty())
-                .map(|n| (n.key.clone(), n.id.clone(), n.cell, Some(n.side.opposite()))),
-        );
-        for (key, id, cell, back) in anchors {
-            let rect = rect_of(cell);
-            for side in Side::ALL {
-                if Some(side) == back || taken.contains(&step(cell, side)) {
-                    continue;
-                }
-                let at = match side {
-                    Side::Left => rect.left_center() - Vec2::new(36.0, 0.0),
-                    Side::Right => rect.right_center() + Vec2::new(36.0, 0.0),
-                    Side::Top => rect.center_top() - Vec2::new(0.0, 30.0),
-                    Side::Bottom => rect.center_bottom() + foot_of(&key) + Vec2::new(0.0, 30.0),
+        let action = egui::ScrollArea::horizontal()
+            .id_salt("device_layout_horizontal")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                let width = ui
+                    .available_width()
+                    .max(cols * 90.0 + (cols - 1.0) * 88.0 + 104.0);
+                let aspect = (self.cfg.h as f32 / self.cfg.w.max(1) as f32).clamp(0.5, 0.75);
+                let (gap_x, gap_y, margin) = (88.0, 64.0, 52.0);
+                let mw = (width * 0.24)
+                    .clamp(132.0, 190.0)
+                    .min((width - 2.0 * margin - (cols - 1.0) * gap_x) / cols)
+                    .max(90.0);
+                let screen = Vec2::new(mw, (mw * aspect).round());
+                let stand = 16.0;
+                let strip = if nodes.iter().any(|n| n.link.is_some()) {
+                    STRIP
+                } else {
+                    0.0
                 };
-                if let Some(a) =
-                    self.layout_plus(ui, &painter, palette, (&key, &id), side, at, &links)
-                {
-                    action = Some(a);
+                let monitor_h = screen.y + stand + strip;
+                let canvas_h =
+                    (rows * monitor_h + (rows - 1.0) * gap_y + 2.0 * margin).max(monitor_h + 120.0);
+                let (canvas, _) =
+                    ui.allocate_exact_size(Vec2::new(width, canvas_h), Sense::hover());
+                let painter = ui.painter().clone();
+                painter.rect(
+                    canvas,
+                    16,
+                    palette.inset,
+                    Stroke::new(1.0, palette.rule_strong),
+                    StrokeKind::Inside,
+                );
+                let dots = painter.with_clip_rect(canvas.shrink(2.0));
+                let mut y = canvas.top() + 14.0;
+                while y < canvas.bottom() {
+                    let mut x = canvas.left() + 14.0;
+                    while x < canvas.right() {
+                        dots.circle_filled(egui::pos2(x, y), 1.0, palette.rule_strong);
+                        x += 22.0;
+                    }
+                    y += 22.0;
                 }
-            }
-        }
+
+                let lift = Vec2::new(0.0, (stand + strip) / 2.0);
+                let foot_of = |key: &str| {
+                    let has_strip = nodes.iter().any(|n| n.key == key && n.link.is_some());
+                    Vec2::new(0.0, stand + if has_strip { STRIP } else { 0.0 })
+                };
+                let (mid_x, mid_y) = ((min_x + max_x) as f32 / 2.0, (min_y + max_y) as f32 / 2.0);
+                let rect_of = |cell: (i32, i32)| {
+                    let at = canvas.center()
+                        + Vec2::new(
+                            (cell.0 as f32 - mid_x) * (screen.x + gap_x),
+                            (cell.1 as f32 - mid_y) * (monitor_h + gap_y),
+                        )
+                        - lift;
+                    egui::Rect::from_center_size(at, screen)
+                };
+                let cell_of = |key: &str| {
+                    nodes
+                        .iter()
+                        .find(|n| n.key == key)
+                        .map_or((0, 0), |n| n.cell)
+                };
+                let own = rect_of((0, 0));
+                monitor(
+                    &painter,
+                    palette,
+                    own,
+                    stand,
+                    &self.cfg.name,
+                    "Bu bilgisayar",
+                    palette.ink2,
+                    palette.rule_strong,
+                    self.performance_visible(own),
+                );
+                self.performance_row(ui, &painter, palette, own, None);
+
+                let mut action: Option<LayoutAction> = None;
+                for node in &nodes {
+                    let from = rect_of(cell_of(&node.parent));
+                    let to = rect_of(node.cell);
+                    let feet = (foot_of(&node.parent), foot_of(&node.key));
+                    let (a, b, edge) = link_points(from, to, node.side, feet);
+                    let tone = node.tone;
+                    if node.live {
+                        painter.line_segment([a, b], Stroke::new(2.0, tone));
+                    } else {
+                        painter.extend(egui::Shape::dashed_line(
+                            &[a, b],
+                            Stroke::new(1.5, tone),
+                            6.0,
+                            5.0,
+                        ));
+                    }
+                    let mid = a + (b - a) / 2.0;
+                    painter.circle(mid, 15.0, palette.surface, Stroke::new(1.5, tone));
+                    design::icon(&painter, mid, Icon::Share, tone, 15.0);
+                    let inset = if matches!(node.side, Side::Left | Side::Right) {
+                        Vec2::new(0.0, 12.0)
+                    } else {
+                        Vec2::new(12.0, 0.0)
+                    };
+                    painter
+                        .line_segment([edge[0] + inset, edge[1] - inset], Stroke::new(3.0, tone));
+                    if let Some(a) = self.layout_device(ui, &painter, palette, to, stand, node) {
+                        action = Some(a);
+                    }
+                }
+
+                let anchors = std::iter::once((String::new(), String::new(), (0, 0), None)).chain(
+                    nodes
+                        .iter()
+                        .filter(|n| !n.id.is_empty())
+                        .map(|n| (n.key.clone(), n.id.clone(), n.cell, Some(n.side.opposite()))),
+                );
+                for (key, id, cell, back) in anchors {
+                    let rect = rect_of(cell);
+                    for side in Side::ALL {
+                        if Some(side) == back || taken.contains(&step(cell, side)) {
+                            continue;
+                        }
+                        let at = match side {
+                            Side::Left => rect.left_center() - Vec2::new(36.0, 0.0),
+                            Side::Right => rect.right_center() + Vec2::new(36.0, 0.0),
+                            Side::Top => rect.center_top() - Vec2::new(0.0, 30.0),
+                            Side::Bottom => {
+                                rect.center_bottom() + foot_of(&key) + Vec2::new(0.0, 30.0)
+                            }
+                        };
+                        if let Some(a) =
+                            self.layout_plus(ui, &painter, palette, (&key, &id), side, at, &links)
+                        {
+                            action = Some(a);
+                        }
+                    }
+                }
+                action
+            })
+            .inner;
         match action {
             Some(LayoutAction::Place(id, side, parent)) => {
                 let unpinned = nodes
@@ -3500,9 +3775,10 @@ impl App {
             .cfg
             .placed
             .iter()
+            .filter(|(id, ..)| !running || links.iter().any(|l| l.id == *id))
             .map(
                 |(id, side, parent)| match links.iter().find(|l| l.id == *id) {
-                    Some(l) => live(l, true, parent.clone(), *side),
+                    Some(l) => live(l, true, l.parent.clone(), l.side),
                     None => Node {
                         key: id.clone(),
                         id: id.clone(),
@@ -3523,33 +3799,32 @@ impl App {
             .collect();
         for l in links {
             if l.id.is_empty() || self.cfg.side_of(&l.id).is_none() {
-                pending.push(live(l, false, String::new(), l.side));
+                pending.push(live(l, false, l.parent.clone(), l.side));
             }
         }
-        let mut cells: std::collections::HashMap<String, (i32, i32)> =
-            std::collections::HashMap::from([(String::new(), (0, 0))]);
-        let mut taken: HashSet<(i32, i32)> = HashSet::from([(0, 0)]);
-        let mut nodes = Vec::new();
-        loop {
-            let before = pending.len();
-            let mut rest = Vec::new();
-            for mut node in pending {
-                let Some(&at) = cells.get(&node.parent) else {
-                    rest.push(node);
-                    continue;
-                };
-                node.cell = step(at, node.side);
-                if taken.insert(node.cell) {
-                    cells.insert(node.key.clone(), node.cell);
-                    nodes.push(node);
-                }
-            }
-            pending = rest;
-            if pending.is_empty() || pending.len() == before {
-                break;
-            }
-        }
-        nodes
+        pending.sort_by_key(|node| !node.live);
+        let positions = crate::layout::resolve(
+            pending
+                .iter()
+                .map(|node| crate::layout::Placement {
+                    key: node.key.clone(),
+                    parent: node.parent.clone(),
+                    side: node.side,
+                    cell: (0, 0),
+                })
+                .collect(),
+        );
+        positions
+            .into_iter()
+            .filter_map(|position| {
+                let index = pending.iter().position(|node| node.key == position.key)?;
+                let mut node = pending.remove(index);
+                node.parent = position.parent;
+                node.side = position.side;
+                node.cell = position.cell;
+                Some(node)
+            })
+            .collect()
     }
 
     fn layout_candidates(
@@ -3684,10 +3959,17 @@ impl App {
             node.status,
             node.tone,
             border,
+            node.live && self.performance_visible(rect),
         );
-        let r = r
-            .on_hover_text(format!("{}: {}", node.name, node.status))
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if node.live {
+            self.performance_row(ui, painter, palette, rect, Some(&node.id));
+        }
+        let r = if node.live && self.performance_visible(rect) {
+            r
+        } else {
+            r.on_hover_text(format!("{}: {}", node.name, node.status))
+        };
+        let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
         let mut chosen = node
             .link
             .as_ref()
@@ -4278,7 +4560,7 @@ impl App {
             (core::Feat::Mic, Pref::MicIn),
         ] {
             if serves(feat) {
-                mine |= flows::bits(&self.cfg) & pref.bit();
+                mine |= self.device_bits(&link.id) & pref.bit();
             }
         }
         let peer = link.prefs;
@@ -4327,16 +4609,16 @@ impl App {
 
     fn popup_link(&self) -> Option<core::Link> {
         let sh = self.shared.as_ref()?;
-        let links = sh.links.lock().unwrap();
+        let links = sh.links.lock().unwrap().clone();
         let chosen = self
             .popup_device
             .as_ref()
             .and_then(|id| links.iter().find(|l| l.key() == *id));
-        let primary = match &*sh.state.lock().unwrap() {
-            State::Connected { peer, .. } => links.iter().find(|l| l.name == *peer),
-            _ => None,
-        };
-        chosen.or(primary).or(links.first()).cloned()
+        let primary = sh.primary_link();
+        chosen
+            .cloned()
+            .or(primary)
+            .or_else(|| links.first().cloned())
     }
 
     fn popup_keys(&self, ui: &mut egui::Ui, dir: Dir, link: &core::Link) -> Vec<PopupAction> {
@@ -4632,7 +4914,7 @@ impl App {
         let mut o = self.cfg.screen;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
-            if monitors.len() > 1 {
+            if o.extend.is_none() && !monitors.is_empty() {
                 let current = monitors.get(o.monitor as usize).cloned().unwrap_or_else(|| monitors[0].clone());
                 egui::ComboBox::from_id_salt("screen_monitor").selected_text(current).show_ui(ui, |ui| {
                     for (i, name) in monitors.iter().enumerate() {
@@ -4641,6 +4923,10 @@ impl App {
                 });
             }
             stream_controls(ui, "bar", &mut o);
+            let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+            if ui.button(if fullscreen { "Pencereye dön" } else { "Tam ekran" }).clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+            }
             ui.separator();
             let tip = if may_control {
                 "Açıkken bu penceredeki mouse ve klavye karşı PC'yi yönetir."
@@ -5612,15 +5898,7 @@ impl App {
                     changed
                 });
                 if changed {
-                    if k == 0 {
-                        self.cfg.relay_in = on
-                    } else {
-                        self.cfg.mic_in = on
-                    }
-                    if let Some(s) = &self.shared {
-                        s.want[k].store(on, Ordering::Relaxed);
-                    }
-                    self.cfg.save();
+                    self.set_pref(if k == 0 { Pref::RelayIn } else { Pref::MicIn }, on);
                 }
                 divider(ui);
             }
@@ -5858,7 +6136,19 @@ impl App {
                     let dir = self.remote.lock().unwrap().path.clone();
                     for name in names {
                         let dirty = self.local_dirty.clone();
-                        transfer::download(
+                        let folder = self
+                            .remote
+                            .lock()
+                            .unwrap()
+                            .entries
+                            .iter()
+                            .any(|e| e.name == name && e.dir);
+                        let download = if folder {
+                            transfer::download_folder
+                        } else {
+                            transfer::download
+                        };
+                        download(
                             sh.clone(),
                             dir.clone(),
                             name,
@@ -5941,18 +6231,32 @@ impl App {
     }
 
     fn page_settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if !self.cfg.active_peer.is_empty() {
+            let name = self
+                .shared
+                .as_ref()
+                .and_then(|sh| sh.primary_link())
+                .map(|link| link.name)
+                .unwrap_or_else(|| self.cfg.active_peer.clone());
+            hint(
+                ui,
+                &format!(
+                    "Paylaşım ayarları {name} için hatırlanır; bağlı bilgisayar değişince otomatik yüklenir."
+                ),
+            );
+        }
         section(ui, Some("Genel"), |ui| {
             let mut au = autostart_on();
             if toggle_row(
                 ui,
                 "Bilgisayar açılınca Mause'u başlat",
-                Some(if cfg!(target_os = "linux") {
+                Some(if AUTOSTART_OK {
                     "Oturum açıldığında Mause arka planda çalışır."
                 } else {
                     "Bu platformda henüz desteklenmiyor."
                 }),
                 &mut au,
-                cfg!(target_os = "linux"),
+                AUTOSTART_OK,
             )
             .on_disabled_hover_text("Bu platformda henüz desteklenmiyor")
             .changed()
@@ -6043,6 +6347,27 @@ impl App {
         self.secret_section(ui);
         self.roles_section(ui);
         self.screen_section(ui);
+        section(ui, Some("Performans göstergeleri"), |ui| {
+            let mut changed = toggle_row(ui, "Bu PC'nin performansını bağlı cihazlarla paylaş", Some("Yalnızca toplam kullanım değerleri paylaşılır. İşlem, dosya ve ağ adresi listeleri gönderilmez."), &mut self.cfg.share_metrics, true).changed();
+            changed |= toggle_row(ui, "Cihaz kartlarında performansı göster", Some("Değerler yaklaşık iki saniyede bir güncellenir. Karşı PC paylaşımı kapatabilir."), &mut self.cfg.show_metrics, true).changed();
+            ui.horizontal_wrapped(|ui| {
+                for (index, label) in ["İşlemci", "RAM", "GPU", "Disk", "Ağ"].iter().enumerate()
+                {
+                    let mut on = self.cfg.metrics_mask & (1 << index) != 0;
+                    if ui.checkbox(&mut on, *label).changed() {
+                        if on {
+                            self.cfg.metrics_mask |= 1 << index;
+                        } else {
+                            self.cfg.metrics_mask &= !(1 << index);
+                        }
+                        changed = true;
+                    }
+                }
+            });
+            if changed {
+                self.sync_perms();
+            }
+        });
 
         section(ui, Some("Bağlantı izinleri"), |ui| {
             let mut req = self.cfg.require_approval;
@@ -6128,7 +6453,7 @@ impl App {
             let mut carry = self.cfg.carry_files;
             if toggle_row(
                 ui,
-                "Kopyalanan dosyaları ekran geçişinde taşı",
+                "Kopyalanan dosya ve klasörleri ekran geçişinde taşı",
                 Some(if supported {
                     carry_hint.as_str()
                 } else {
@@ -6158,11 +6483,7 @@ impl App {
             .on_disabled_hover_text(unsupported)
             .changed()
             {
-                self.cfg.share_text = st;
-                if let Some(s) = &self.shared {
-                    s.share_text.store(st, Ordering::Relaxed);
-                }
-                self.cfg.save();
+                self.set_pref(Pref::ShareText, st);
             }
             divider(ui);
             let inbox = transfer::inbox();
@@ -6422,6 +6743,45 @@ impl App {
 
     fn screen_section(&mut self, ui: &mut egui::Ui) {
         section(ui, Some("Ekran paylaşımı"), |ui| {
+            #[cfg(target_os = "windows")]
+            {
+                hint(
+                    ui,
+                    "Bu PC'nin masaüstünü diğer PC'ye genişletmek için sürücüyü bu PC'ye kurun. Diğer PC'de Ekran penceresinden ‘Ek monitör olarak kullan’ı seçin. Ana ekranı görmek için ‘Mevcut ekranı izle’yi seçin.",
+                );
+                let ready = crate::vdisplay::available();
+                let busy = self.vdisplay_note.lock().unwrap().as_deref() == Some("Kuruluyor…");
+                if ui
+                    .add_enabled(
+                        !ready && !busy,
+                        egui::Button::new(if ready {
+                            "Sanal ekran sürücüsü hazır"
+                        } else {
+                            "Sanal ekran sürücüsünü kur"
+                        }),
+                    )
+                    .clicked()
+                {
+                    let note = self.vdisplay_note.clone();
+                    *note.lock().unwrap() = Some("Kuruluyor…".into());
+                    std::thread::spawn(move || {
+                        *note.lock().unwrap() = Some(match crate::vdisplay::setup() {
+                            Ok(()) => "Sanal ekran sürücüsü hazır.".into(),
+                            Err(e) => format!("Kurulamadı: {e}"),
+                        });
+                    });
+                }
+                if let Some(note) = self.vdisplay_note.lock().unwrap().as_ref() {
+                    ui.label(note);
+                }
+                if ready && ui.button("Sanal ekranı kapat").on_hover_text("Aktif paylaşım yokken sanal monitörü Windows masaüstünden kaldırır; sürücü kurulu kalır.").clicked() {
+                    *self.vdisplay_note.lock().unwrap() = Some(match crate::vdisplay::park() {
+                        Ok(()) => "Sanal ekran kapatıldı; ek monitör paylaşımı başlayınca yeniden açılır.".into(),
+                        Err(e) => e,
+                    });
+                }
+                divider(ui);
+            }
             let mut changed = toggle_row(
                 ui,
                 "Karşı PC bu PC'nin ekranını izleyebilsin",
@@ -6596,13 +6956,18 @@ impl App {
                     }
                 });
                 setting_row(ui, &d.name, Some(&note), 110.0, |ui| {
+                    let busy = status.get(&d.busid).is_some_and(|s| s.ends_with('…'));
                     let (label, op) = if on {
                         ("Çıkar", usb::DETACH)
                     } else {
                         ("Bağla", usb::ATTACH)
                     };
                     let kind = if on { KeyKind::Plain } else { KeyKind::Primary };
-                    if design::key(ui, label, kind, true, 0.0).clicked() {
+                    if design::key(ui, label, kind, !busy, 0.0).clicked() {
+                        sh.usb_status
+                            .lock()
+                            .unwrap()
+                            .insert(d.busid.clone(), "işlem bekliyor…".into());
                         sh.usb_cmds.lock().unwrap().push((op, d.busid.clone()));
                     }
                 });
@@ -6759,13 +7124,93 @@ fn autostart_set(on: bool) {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+
+#[cfg(target_os = "windows")]
+fn reg(args: &[&str]) -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new("reg")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[cfg(target_os = "windows")]
+fn autostart_on() -> bool {
+    reg(&["query", RUN_KEY, "/v", "Mause"])
+}
+
+#[cfg(target_os = "windows")]
+fn autostart_set(on: bool) {
+    if on {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let value = format!("\"{}\"", exe.display());
+        reg(&[
+            "add", RUN_KEY, "/v", "Mause", "/t", "REG_SZ", "/d", &value, "/f",
+        ]);
+    } else {
+        reg(&["delete", RUN_KEY, "/v", "Mause", "/f"]);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join("Library/LaunchAgents/io.github.mause.plist")
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_on() -> bool {
+    autostart_path().exists()
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_set(on: bool) {
+    let p = autostart_path();
+    if on {
+        let exe = std::env::current_exe()
+            .map(|e| e.display().to_string())
+            .unwrap_or_else(|_| "/Applications/Mause.app/Contents/MacOS/mause".into());
+        let esc = exe
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(
+            p,
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>io.github.mause</string>\n<key>ProgramArguments</key><array><string>{esc}</string></array>\n<key>RunAtLoad</key><true/>\n</dict></plist>\n"
+            ),
+        );
+    } else {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 fn autostart_on() -> bool {
     false
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 fn autostart_set(_: bool) {}
+
+const AUTOSTART_OK: bool = cfg!(any(
+    target_os = "linux",
+    target_os = "windows",
+    target_os = "macos"
+));
 
 #[cfg(test)]
 fn ui_fixture(page: Page, theme: u8) -> App {
@@ -6816,6 +7261,8 @@ fn ui_fixture(page: Page, theme: u8) -> App {
         camera: None,
         torch_on: HashSet::new(),
         vcam_note: Arc::default(),
+        #[cfg(target_os = "windows")]
+        vdisplay_note: Arc::default(),
         screen_ctrl: false,
         screen_mods: [false; 4],
         screen_down: Vec::new(),
@@ -6916,7 +7363,7 @@ mod file_pane_tests {
         pane.select("Klasör", &order, false, false);
         pane.select("b.txt", &order, false, true);
         assert_eq!(pane.selected.len(), 3);
-        assert_eq!(pane.selected_files(), ["b.txt", "a.txt"]);
+        assert_eq!(pane.selected_items(), ["b.txt", "Klasör", "a.txt"]);
         pane.select("a.txt", &order, true, false);
         assert!(!pane.selected.contains("a.txt"));
         pane.select("a.txt", &order, false, false);
@@ -6930,6 +7377,151 @@ mod layout_tests {
 
     fn fixture(page: Page, theme: u8) -> App {
         ui_fixture(page, theme)
+    }
+
+    fn connected_pc(id: &str, name: &str, session: u64) -> core::Link {
+        core::Link {
+            id: id.into(),
+            name: name.into(),
+            session,
+            ip: format!("10.0.0.{session}"),
+            side: Side::Right,
+            parent: String::new(),
+            control: Control::Local,
+            prefs: Some(1),
+            sending: [false; 2],
+            screen_out: false,
+            version: Some("test".into()),
+        }
+    }
+
+    #[test]
+    fn connecting_a_different_pc_restores_its_settings_layout_and_current_name() {
+        let mut app = fixture(Page::Share, 1);
+        let sh = Shared::new(false);
+        app.shared = Some(sh.clone());
+        app.cfg.paired = vec![
+            ("A".into(), "Old A".into(), "secret-a".into()),
+            ("B".into(), "Old B".into(), "secret-b".into()),
+        ];
+        app.cfg.place("A", Side::Right, "");
+        app.cfg.place("B", Side::Right, "");
+        app.cfg.activate_peer("A");
+        app.cfg.relay_latency = 150;
+        app.cfg.relay_in = true;
+        app.cfg.activate_peer("B");
+        app.cfg.relay_latency = 50;
+        for (id, name, session, latency, relay) in [
+            ("A", "Current A", 1, 150, true),
+            ("B", "Current B", 2, 50, false),
+            ("A", "Renamed A", 3, 150, true),
+        ] {
+            let link = connected_pc(id, name, session);
+            *sh.links.lock().unwrap() = vec![link.clone()];
+            app.popup_device = Some("old-offline-id".into());
+            app.sync_connected_peer();
+            assert_eq!(app.cfg.active_peer, id);
+            assert_eq!(app.cfg.relay_latency, latency);
+            assert_eq!(sh.latency.load(Ordering::Relaxed), latency);
+            assert_eq!(app.cfg.relay_in, relay);
+            assert_eq!(app.popup_link().unwrap().name, name);
+            assert!(app.popup_device.is_none());
+            let nodes = app.layout_nodes(&[link], true, Palette::new(true));
+            assert_eq!(
+                nodes.len(),
+                1,
+                "saved offline PCs must not hide the connected PC"
+            );
+            assert_eq!(nodes[0].id, id);
+            assert_eq!(nodes[0].name, name);
+            assert_eq!(nodes[0].cell, (1, 0));
+            assert_eq!(
+                app.cfg.paired.iter().find(|(i, ..)| i == id).unwrap().1,
+                name
+            );
+        }
+        sh.links.lock().unwrap().clear();
+        app.sync_connected_peer();
+        assert!(app.cfg.active_peer.is_empty());
+        assert!(app.layout_nodes(&[], true, Palette::new(true)).is_empty());
+        assert!(app.cfg.side_of("A").is_some() && app.cfg.side_of("B").is_some());
+    }
+
+    #[test]
+    fn saved_and_live_layout_collisions_display_every_pc_in_an_adjacent_cell() {
+        let mut app = fixture(Page::Share, 1);
+        let mut links = Vec::new();
+        for session in 1..=6 {
+            let id = format!("id{session}");
+            app.cfg.place(&id, Side::Right, "");
+            links.push(connected_pc(&id, &format!("PC {session}"), session));
+        }
+        for running in [false, true] {
+            let nodes = app.layout_nodes(
+                if running { &links } else { &[] },
+                running,
+                Palette::new(true),
+            );
+            assert_eq!(nodes.len(), 6);
+            for (index, node) in nodes.iter().enumerate() {
+                assert_eq!(node.cell, (index as i32 + 1, 0));
+                assert_eq!(
+                    node.parent,
+                    if index == 0 {
+                        String::new()
+                    } else {
+                        format!("id{index}")
+                    }
+                );
+                assert_eq!(app.cfg.parent_of(&node.id), Some(""));
+            }
+        }
+    }
+
+    #[test]
+    fn performance_icons_expose_measurements_and_respect_category_selection() {
+        let mut app = fixture(Page::Share, 1);
+        app.cfg.show_metrics = true;
+        let sh = Shared::new(false);
+        let mut sample = crate::metrics::Sample::default();
+        sample.values[crate::metrics::CPU] = Some(2300);
+        *sh.metrics_local.lock().unwrap() = Some(crate::metrics::TimedSample {
+            at: Instant::now(),
+            sample,
+        });
+        app.shared = Some(sh);
+        for mask in [crate::metrics::ALL, 1] {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            apply_style(&ctx, 1);
+            app.cfg.metrics_mask = mask;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(220.0, 150.0),
+                )),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let rect =
+                    egui::Rect::from_min_size(egui::pos2(10.0, 10.0), Vec2::new(190.0, 115.0));
+                app.performance_row(ui, &ui.painter().clone(), Palette::of(ui), rect, None);
+            });
+            let update = output.platform_output.accesskit_update.take().unwrap();
+            assert!(update.nodes.iter().any(|(_, n)| {
+                n.value()
+                    .or(n.label())
+                    .is_some_and(|l| l.contains("İşlemci kullanımı: %23"))
+            }));
+            assert_eq!(
+                update.nodes.iter().any(|(_, n)| n
+                    .value()
+                    .or(n.label())
+                    .is_some_and(|l| l.starts_with("RAM:"))),
+                mask == crate::metrics::ALL
+            );
+            output.textures_delta.clear();
+        }
     }
 
     #[test]

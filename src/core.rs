@@ -55,6 +55,32 @@ impl Link {
     }
 }
 
+fn arrange_links(links: &mut [Link], cfg: Option<&Config>) {
+    let placements = crate::layout::resolve(
+        links
+            .iter()
+            .map(|link| {
+                let saved_side = cfg.and_then(|cfg| cfg.side_of(&link.id));
+                let parent = cfg
+                    .and_then(|cfg| cfg.parent_of(&link.id))
+                    .unwrap_or(&link.parent);
+                crate::layout::Placement {
+                    key: link.key(),
+                    parent: parent.to_owned(),
+                    side: saved_side.unwrap_or(link.side),
+                    cell: (0, 0),
+                }
+            })
+            .collect(),
+    );
+    for placement in placements {
+        if let Some(link) = links.iter_mut().find(|link| link.key() == placement.key) {
+            link.parent = placement.parent;
+            link.side = placement.side;
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct DeviceInfo {
     pub caps: Vec<hardware::Cap>,
@@ -195,6 +221,7 @@ impl Perms {
 }
 
 pub struct Shared {
+    pub config: Mutex<Option<Config>>,
     #[cfg(test)]
     pub test_transfer: crate::test_support::TransferSettings,
     pub stop: AtomicBool,
@@ -221,6 +248,10 @@ pub struct Shared {
     pub requests: Mutex<Vec<Request>>,
     pub learned: Mutex<Vec<(String, String)>>,
     pub share_text: AtomicBool,
+    pub metrics_share: AtomicBool,
+    pub metrics_show: AtomicBool,
+    pub metrics_local: Mutex<Option<crate::metrics::TimedSample>>,
+    pub metrics_peer: Mutex<HashMap<String, crate::metrics::TimedSample>>,
     pub last_text: Mutex<String>,
     pub last_carry: Mutex<Vec<std::path::PathBuf>>,
     pub peer_prefs: Mutex<Option<u16>>,
@@ -256,6 +287,7 @@ pub struct Shared {
 impl Shared {
     pub fn new(echo: bool) -> Arc<Self> {
         Arc::new(Self {
+            config: Mutex::new(None),
             #[cfg(test)]
             test_transfer: crate::test_support::TransferSettings::default(),
             stop: AtomicBool::new(false),
@@ -282,6 +314,10 @@ impl Shared {
             requests: Mutex::new(Vec::new()),
             learned: Mutex::new(Vec::new()),
             share_text: AtomicBool::new(true),
+            metrics_share: AtomicBool::new(false),
+            metrics_show: AtomicBool::new(false),
+            metrics_local: Mutex::default(),
+            metrics_peer: Mutex::default(),
             last_text: Mutex::new(String::new()),
             last_carry: Mutex::new(Vec::new()),
             peer_prefs: Mutex::new(None),
@@ -370,7 +406,7 @@ impl Shared {
     }
 
     fn device_off(&self, id: &str, pref: Pref) -> bool {
-        if matches!(pref, Pref::RelayIn | Pref::MicIn) || id.is_empty() {
+        if id.is_empty() {
             return self.apply_remote_pref(pref, false);
         }
         let base = self.device_base(id);
@@ -381,18 +417,18 @@ impl Shared {
     }
 
     fn device_on(&self, id: &str, pref: Pref) -> bool {
-        if matches!(pref, Pref::RelayIn | Pref::MicIn) || id.is_empty() {
-            if !id.is_empty() {
-                let feat = if pref == Pref::RelayIn {
-                    Feat::Audio
-                } else {
-                    Feat::Mic
-                };
-                self.set_target(feat, id);
-            }
+        if id.is_empty() {
             self.apply_pref(pref, true);
             self.in_prefs.lock().unwrap().push((pref, true));
             return true;
+        }
+        if matches!(pref, Pref::RelayIn | Pref::MicIn) {
+            let feat = if pref == Pref::RelayIn {
+                Feat::Audio
+            } else {
+                Feat::Mic
+            };
+            self.set_target(feat, id);
         }
         let base = self.device_base(id);
         let mut map = self.device_perms.lock().unwrap();
@@ -468,16 +504,59 @@ impl Shared {
             .or(links.first())
         {
             None => State::Waiting,
-            Some(l) => State::Connected {
-                peer: l.name.clone(),
-                control: links
-                    .iter()
-                    .find(|o| o.session == owner)
-                    .map_or(Control::Local, |o| o.control),
-            },
+            Some(l) => {
+                self.primary.store(l.session, Ordering::Relaxed);
+                *self.peer_prefs.lock().unwrap() = l.prefs;
+                *self.peer_version.lock().unwrap() = l.version.clone();
+                State::Connected {
+                    peer: l.name.clone(),
+                    control: links
+                        .iter()
+                        .find(|o| o.session == owner)
+                        .map_or(Control::Local, |o| o.control),
+                }
+            }
         };
         drop(links);
         self.set(st);
+    }
+
+    pub fn primary_link(&self) -> Option<Link> {
+        let links = self.links.lock().unwrap();
+        links
+            .iter()
+            .find(|l| l.session == self.primary.load(Ordering::Relaxed))
+            .or(links.first())
+            .cloned()
+    }
+
+    fn add_link(&self, link: Link) -> io::Result<(Side, String)> {
+        let cfg = self.config.lock().unwrap().clone();
+        let mut links = self.links.lock().unwrap();
+        if !link.id.is_empty() && links.iter().any(|existing| existing.id == link.id) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "bu cihaz zaten bağlı",
+            ));
+        }
+        let session = link.session;
+        links.push(link);
+        arrange_links(&mut links, cfg.as_ref());
+        let link = links.iter().find(|link| link.session == session).unwrap();
+        Ok((link.side, link.parent.clone()))
+    }
+
+    pub fn apply_connection_settings(&self, cfg: &Config) {
+        *self.perms.lock().unwrap() = Perms::from_cfg(cfg);
+        self.want[0].store(cfg.relay_in, Ordering::Relaxed);
+        self.want[1].store(cfg.mic_in, Ordering::Relaxed);
+        *self.src.lock().unwrap() = [cfg.relay_src.clone(), cfg.mic_src.clone()];
+        self.latency.store(cfg.relay_latency, Ordering::Relaxed);
+        self.carry_files.store(cfg.carry_files, Ordering::Relaxed);
+        self.share_text.store(cfg.share_text, Ordering::Relaxed);
+        self.remote_prefs
+            .store(cfg.allow_remote_prefs, Ordering::Relaxed);
+        *self.screen_opts.lock().unwrap() = cfg.screen;
     }
 
     pub fn target(&self, feat: Feat) -> String {
@@ -519,6 +598,10 @@ impl Shared {
 
     fn local_prefs_for(&self, id: &str, session: u64) -> u16 {
         let mut bits = self.prefs_with(self.perms_for(id), self.shares_text(id));
+        if let Some(saved) = self.device_perms.lock().unwrap().get(id) {
+            let mask = Pref::RelayIn.bit() | Pref::MicIn.bit();
+            bits = (bits & !mask) | (saved & mask);
+        }
         for (feat, pref) in [(Feat::Audio, Pref::RelayIn), (Feat::Mic, Pref::MicIn)] {
             if !self.target_is(feat, id, session) {
                 bits &= !pref.bit();
@@ -591,12 +674,16 @@ impl Shared {
 }
 
 pub fn run(cfg: Config, sh: Arc<Shared>) {
+    *sh.config.lock().unwrap() = Some(cfg.clone());
     sh.want[0].store(cfg.relay_in, Ordering::Relaxed);
     sh.want[1].store(cfg.mic_in, Ordering::Relaxed);
     *sh.src.lock().unwrap() = [cfg.relay_src.clone(), cfg.mic_src.clone()];
     sh.latency.store(cfg.relay_latency, Ordering::Relaxed);
     sh.carry_files.store(cfg.carry_files, Ordering::Relaxed);
     sh.share_text.store(cfg.share_text, Ordering::Relaxed);
+    sh.metrics_share.store(cfg.share_metrics, Ordering::Relaxed);
+    sh.metrics_show.store(cfg.show_metrics, Ordering::Relaxed);
+    crate::metrics::start(Arc::downgrade(&sh));
     *sh.policy.lock().unwrap() = Policy::from_cfg(&cfg);
     *sh.perms.lock().unwrap() = Perms::from_cfg(&cfg);
     sh.remote_prefs
@@ -622,7 +709,7 @@ pub fn run(cfg: Config, sh: Arc<Shared>) {
 enum Msg {
     Dev(Vec<Ev>),
     FromPeer(u64, Frame),
-    Closed(u64),
+    Closed(u64, String),
     Input(Vec<Ev>),
     UsbOut(u64, u8, String),
     Takeover(u64, u16, Option<Side>),
@@ -772,12 +859,12 @@ fn main_loop(cfg: &Config, sh: &Arc<Shared>) -> io::Result<()> {
         }
         if last_try.elapsed() > Duration::from_secs(2) {
             last_try = Instant::now();
-            let linked: Vec<(String, String, Side, String)> = sh
+            let linked: Vec<(String, String)> = sh
                 .links
                 .lock()
                 .unwrap()
                 .iter()
-                .map(|l| (l.id.clone(), l.ip.clone(), l.side, l.parent.clone()))
+                .map(|l| (l.id.clone(), l.ip.clone()))
                 .collect();
             let mut target: Option<(String, String, String, Side)> = None;
             if manual {
@@ -793,13 +880,10 @@ fn main_loop(cfg: &Config, sh: &Arc<Shared>) -> io::Result<()> {
             if target.is_none() {
                 for (ip, name, port, id) in discover::all() {
                     let side = cfg.side_of(&id).unwrap_or(cfg.side);
-                    let parent = cfg.parent_of(&id).unwrap_or("");
                     if discover::self_id() >= id.as_str()
                         || sh.policy.lock().unwrap().blocked.contains(&id)
                         || denied.get(&ip).is_some_and(|t| Instant::now() <= *t)
-                        || linked
-                            .iter()
-                            .any(|(i, a, s, p)| *i == id || *a == ip || (*s == side && p == parent))
+                        || linked.iter().any(|(i, a)| *i == id || *a == ip)
                     {
                         continue;
                     }
@@ -862,6 +946,8 @@ fn main_loop(cfg: &Config, sh: &Arc<Shared>) -> io::Result<()> {
     }
     Ok(())
 }
+
+const ECHO_NOTE: &str = "İki PC aynı anda birbirine sistem sesi gönderirse ses kendini besleyip parazit yapar; bu yüzden PC sesi tek yönde aktarılıyor.";
 
 struct Start {
     initiator: bool,
@@ -1078,7 +1164,7 @@ fn authorize(
     result
 }
 
-fn send_clip_text(s: &mut Secure, share: bool, last: &mut String) -> io::Result<()> {
+fn send_clip_text(s: &mut impl std::io::Write, share: bool, last: &mut String) -> io::Result<()> {
     if !share {
         return Ok(());
     }
@@ -1091,6 +1177,7 @@ fn send_clip_text(s: &mut Secure, share: bool, last: &mut String) -> io::Result<
 
 fn end_session(sh: &Shared, inj: &Mutex<Injector>, r: io::Result<()>, session: u64) {
     if let Err(e) = r {
+        crate::connection::record(format!("session={session} ended ({:?}): {e}", e.kind()));
         if !sh.stopping() {
             sh.log(format!("Oturum bitti: {e}"));
         }
@@ -1098,6 +1185,7 @@ fn end_session(sh: &Shared, inj: &Mutex<Injector>, r: io::Result<()>, session: u
     SLOT.lock().unwrap().retain(|(id, _)| *id != session);
     let _ = INPUT_TO.compare_exchange(session, 0, Ordering::AcqRel, Ordering::Relaxed);
     let gone: Vec<Link> = {
+        let cfg = sh.config.lock().unwrap().clone();
         let mut links = sh.links.lock().unwrap();
         let gone = links
             .iter()
@@ -1105,9 +1193,11 @@ fn end_session(sh: &Shared, inj: &Mutex<Injector>, r: io::Result<()>, session: u
             .cloned()
             .collect();
         links.retain(|l| l.session != session);
+        arrange_links(&mut links, cfg.as_ref());
         gone
     };
     for l in &gone {
+        sh.metrics_peer.lock().unwrap().remove(&l.id);
         sh.devices.lock().unwrap().remove(&l.id);
         sh.peer_secrets.lock().unwrap().remove(&l.ip);
         let mut ip = sh.peer_ip.lock().unwrap();
@@ -1182,6 +1272,15 @@ fn beyond(x: i32, y: i32, w: i32, h: i32) -> Option<Side> {
     }
 }
 
+fn at_edge(x: i32, y: i32, edge: Side, w: i32, h: i32) -> bool {
+    match edge {
+        Side::Left => x <= 1,
+        Side::Right => x >= w - 2,
+        Side::Top => y <= 1,
+        Side::Bottom => y >= h - 2,
+    }
+}
+
 fn edge_along(x: i32, y: i32, edge: Side, w: i32, h: i32) -> u16 {
     if matches!(edge, Side::Left | Side::Right) {
         (y.clamp(0, h - 1) * 65535 / h) as u16
@@ -1214,6 +1313,10 @@ fn hand_off(sh: &Shared, from: u64, to: u64, pos: u16, push: Option<Side>) -> bo
         return false;
     }
     tx.send(Msg::Takeover(to, pos, push)).is_ok()
+}
+
+fn updated_peer_flags(flags: u32, preferences: u16) -> u32 {
+    (flags & !0x1F) | (preferences as u32 & 0x1F) | flows::SUPPORTS_PREFS
 }
 
 fn not_for_us(f: &Frame, screen_mine: bool, usb_mine: bool) -> bool {
@@ -1251,6 +1354,8 @@ fn run_session(
             | flows::SUPPORTS_USB
             | flows::SUPPORTS_VERSION
             | flows::SUPPORTS_HARDWARE
+            | flows::SUPPORTS_METRICS
+            | flows::SUPPORTS_USB2
     );
     let parse = parse_ident;
     let (eff, peer, mut pflags, pid, far_home, (pw, ph)) = if initiator {
@@ -1319,7 +1424,36 @@ fn run_session(
         }
     };
     let (pw, ph) = (pw.max(1), ph.max(1));
-    let parent = cfg.parent_of(&pid).unwrap_or("").to_string();
+    let parent = cfg
+        .parent_of(&pid)
+        .filter(|parent| {
+            parent.is_empty() || sh.links.lock().unwrap().iter().any(|l| l.id == *parent)
+        })
+        .unwrap_or("")
+        .to_string();
+    if !pid.is_empty() {
+        let peer_cfg = sh
+            .config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap_or(cfg)
+            .for_peer(&pid);
+        let bits = flows::bits(&peer_cfg)
+            | if peer_cfg.allow_screen_out {
+                flows::SCREEN_OUT
+            } else {
+                0
+            };
+        sh.device_perms
+            .lock()
+            .unwrap()
+            .entry(pid.clone())
+            .or_insert(bits);
+        if sh.links.lock().unwrap().is_empty() {
+            sh.apply_connection_settings(&peer_cfg);
+        }
+    }
     let hash = s.hash;
     let screen_ok = pflags & flows::SUPPORTS_SCREEN != 0 && pflags != 0xFF;
     let screen2_ok = pflags & flows::SUPPORTS_SCREEN2 != 0 && pflags != 0xFF;
@@ -1338,12 +1472,8 @@ fn run_session(
     } else if primary {
         *sh.peer_version.lock().unwrap() = Some(String::new());
     }
-    sh.log(format!(
-        "{peer} bağlandı. Ekranın {} tarafında. Acil dönüş: Ctrl+Alt+Home",
-        eff.tr()
-    ));
     let peer_ip = s.peer_addr()?.ip().to_string();
-    sh.links.lock().unwrap().push(Link {
+    let (eff, parent) = sh.add_link(Link {
         session,
         id: pid.clone(),
         name: peer.clone(),
@@ -1355,22 +1485,30 @@ fn run_session(
         sending: [false; 2],
         screen_out: false,
         version: (!knows_version).then(String::new),
-    });
+    })?;
+    sh.log(format!(
+        "{peer} bağlandı. Ekranın {} tarafında. Acil dönüş: Ctrl+Alt+Home",
+        eff.tr()
+    ));
     let set = |c: Control| sh.set_control(session, c);
     set(Control::Local);
 
     let (tx, rx): (Sender<Msg>, Receiver<Msg>) = mpsc::channel();
     SLOT.lock().unwrap().push((session, tx.clone()));
     let usb_tx = tx.clone();
-    let mut rs = s.try_clone()?;
-    thread::spawn(move || {
-        while let Ok(f) = read_frame(&mut rs) {
-            if tx.send(Msg::FromPeer(session, f)).is_err() {
-                return;
-            }
-        }
-        let _ = tx.send(Msg::Closed(session));
-    });
+    let closed = tx.clone();
+    let mut s = crate::connection::start(
+        s,
+        move |frame| tx.send(Msg::FromPeer(session, frame)).is_ok(),
+        move |reason| {
+            crate::connection::record(format!("session={session} transport: {reason}"));
+            let _ = closed.send(Msg::Closed(session, reason));
+        },
+    )?;
+    crate::connection::record(format!(
+        "session={session} peer={peer} ip={peer_ip} connected; build={}",
+        env!("CARGO_PKG_VERSION")
+    ));
 
     sh.peer_secrets
         .lock()
@@ -1386,25 +1524,28 @@ fn run_session(
     let mut info_sent = String::new();
     let mut usb_server: Option<usb::Tunnel> = None;
     let mut audio_retry: [Option<Instant>; 2] = [None, None];
+    let mut audio_asked: [Option<Instant>; 2] = [None, None];
+    let mut echo_warned = false;
     let mut screen_retry: Option<Instant> = None;
     let mut usb_client: Option<usb::Tunnel> = None;
-    let hit = |nx: i32, ny: i32| beyond(nx, ny, w, h) == Some(eff);
-    let along = |x: i32, y: i32| edge_along(x, y, eff, w, h);
-    let place = |pos: u16, inset: i32| edge_point(pos, eff, inset, w, h);
+    let metrics_ok = pflags & flows::SUPPORTS_METRICS != 0;
+    let mut metrics_requested = false;
+    let mut metrics_subscribed = None;
+    let mut metrics_sent = Instant::now() - Duration::from_secs(2);
+    let flash = |edge: Side, x: i32, y: i32| {
+        platform::edge_flash(x, y, matches!(edge, Side::Left | Side::Right), w, h)
+    };
+    let link_key = if pid.is_empty() {
+        format!("#{session}")
+    } else {
+        pid.clone()
+    };
     let child_on = |edge: Side| -> Option<u64> {
         sh.links
             .lock()
             .unwrap()
             .iter()
-            .find(|l| l.parent == pid && l.side == edge && !pid.is_empty())
-            .map(|l| l.session)
-    };
-    let parent_session = || -> Option<u64> {
-        sh.links
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|l| l.id == parent && !parent.is_empty())
+            .find(|l| l.parent == link_key && l.side == edge)
             .map(|l| l.session)
     };
     let mut mirror = (pw / 2, ph / 2);
@@ -1416,9 +1557,12 @@ fn run_session(
     let (ctrl, alt, home) = (ev::KEY_LEFTCTRL, ev::KEY_LEFTALT, ev::KEY_HOME);
     let (mut moved, mut moved_at) = (0i32, Instant::now());
     let mut gain = crate::pointer::Gain::new();
+    let local_scale = platform::ui_scale();
+    gain.set_local_scale(local_scale);
+    let mut incoming = crate::pointer::Incoming::new(local_scale);
     let mut pending: Option<Msg> = None;
 
-    let (mut last_rx, mut last_ping) = (Instant::now(), Instant::now());
+    let mut last_ping = Instant::now();
     let prefs_ok = pflags & flows::SUPPORTS_PREFS != 0 && pflags != 0xFF;
     if hardware_ok {
         write_frame(&mut s, &Frame::Device(hardware::LIST, Vec::new()))?;
@@ -1426,6 +1570,25 @@ fn run_session(
     let mut prefs_sent: Option<u16> = None;
     let mut screen_control_allowed = sh.perms_for(&pid).screen_control;
     while !sh.stopping() {
+        let (eff, parent) = sh
+            .links
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|link| link.session == session)
+            .map(|link| (link.side, link.parent.clone()))
+            .unwrap_or((eff, parent.clone()));
+        let hit = |nx: i32, ny: i32| beyond(nx, ny, w, h) == Some(eff);
+        let along = |x: i32, y: i32| edge_along(x, y, eff, w, h);
+        let place = |pos: u16, inset: i32| edge_point(pos, eff, inset, w, h);
+        let parent_session = || -> Option<u64> {
+            sh.links
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|link| link.key() == parent && !parent.is_empty())
+                .map(|link| link.session)
+        };
         let screen_mine = sh.target_is(Feat::Screen, &pid, session);
         let usb_mine = usb_ok && sh.target_is(Feat::Usb, &pid, session);
         let files_mine = sh.target_is(Feat::Files, &pid, session);
@@ -1438,7 +1601,12 @@ fn run_session(
             }
         }
         if usb_mine && usb_server.is_none() {
-            usb_server = usb::serve(peer_ip.clone(), secret.clone()).ok();
+            let port = if pflags & flows::SUPPORTS_USB2 != 0 {
+                usb::PORT
+            } else {
+                usb::LEGACY_PORT
+            };
+            usb_server = usb::serve(peer_ip.clone(), secret.clone(), port).ok();
             if usb_server.is_some() {
                 sh.usb_holder.store(session, Ordering::Relaxed);
             }
@@ -1454,9 +1622,9 @@ fn run_session(
         }
         let mine_out = |sh: &Shared| -> Vec<(Pref, bool)> {
             let mut out = sh.out_prefs.lock().unwrap();
-            let (here, rest): (Vec<_>, Vec<_>) = out
-                .drain(..)
-                .partition(|(id, ..)| *id == pid || (id.is_empty() && primary));
+            let (here, rest): (Vec<_>, Vec<_>) = out.drain(..).partition(|(id, ..)| {
+                *id == pid || (id.is_empty() && sh.primary.load(Ordering::Relaxed) == session)
+            });
             *out = rest;
             here.into_iter().map(|(_, p, on)| (p, on)).collect()
         };
@@ -1485,13 +1653,28 @@ fn run_session(
             }
         }
         if last_ping.elapsed() >= Duration::from_secs(1) {
-            write_frame(&mut s, &Frame::Ping)?;
+            if metrics_ok {
+                let show = sh.metrics_show.load(Ordering::Relaxed);
+                if metrics_subscribed != Some(show) {
+                    write_frame(
+                        &mut s,
+                        &Frame::Device(hardware::METRICS_SUBSCRIBE, vec![show as u8]),
+                    )?;
+                    metrics_subscribed = Some(show);
+                    if !show {
+                        sh.metrics_peer.lock().unwrap().remove(&pid);
+                    }
+                }
+                if metrics_requested && metrics_sent.elapsed() >= Duration::from_secs(2) {
+                    let data = crate::metrics::payload(
+                        sh.metrics_share.load(Ordering::Relaxed),
+                        sh.metrics_local.lock().unwrap().as_ref(),
+                    );
+                    write_frame(&mut s, &Frame::Device(hardware::METRICS_SAMPLE, data))?;
+                    metrics_sent = Instant::now();
+                }
+            }
             last_ping = Instant::now();
-        }
-        if last_rx.elapsed() > Duration::from_secs(5) {
-            return Err(io::Error::other(
-                "karşı PC yanıt vermiyor (kapanmış ya da ağ kopmuş olabilir)",
-            ));
         }
         let local_perms = sh.perms_for(&pid);
         for (i, allowed) in [local_perms.audio_out, local_perms.mic_out]
@@ -1519,7 +1702,9 @@ fn run_session(
         screen_control_allowed = local_perms.screen_control;
         for i in 0..2 {
             let feat = if i == 0 { Feat::Audio } else { Feat::Mic };
-            let want = sh.target_is(feat, &pid, session) && sh.want[i].load(Ordering::Relaxed);
+            let pref = if i == 0 { Pref::RelayIn } else { Pref::MicIn };
+            let want = sh.target_is(feat, &pid, session)
+                && sh.local_prefs_for(&pid, session) & pref.bit() != 0;
             if want && !sent[i] && audio_retry[i].is_some_and(|t| Instant::now() < t) {
                 continue;
             }
@@ -1555,8 +1740,32 @@ fn run_session(
                     }
                     audio_retry[i] = None;
                 }
+                if want && i == 0 && send[0].is_some() {
+                    if !initiator {
+                        if !echo_warned {
+                            echo_warned = true;
+                            sh.log(ECHO_NOTE);
+                        }
+                        continue;
+                    }
+                    send[0] = None;
+                    sh.update_link(session, |l| l.sending[0] = false);
+                    sh.log(ECHO_NOTE);
+                }
                 write_frame(&mut s, &Frame::AudioReq(i as u8, want))?;
                 sent[i] = want;
+                audio_asked[i] = want.then(Instant::now);
+            } else if want
+                && sent[i]
+                && pflags & (2 << i) != 0
+                && audio_asked[i].is_some_and(|t| t.elapsed() >= Duration::from_secs(3))
+                && sh.relay_last[i]
+                    .lock()
+                    .unwrap()
+                    .is_none_or(|t| t.elapsed() >= Duration::from_secs(3))
+            {
+                write_frame(&mut s, &Frame::AudioReq(i as u8, true))?;
+                audio_asked[i] = Some(Instant::now());
             }
         }
         let want = screen_mine && sh.screen_want.load(Ordering::Relaxed);
@@ -1690,8 +1899,8 @@ fn run_session(
             }
         }
         match msg {
-            Msg::Closed(id) if id == session => {
-                return Err(io::Error::other("karşı taraf bağlantıyı kapattı"));
+            Msg::Closed(id, reason) if id == session => {
+                return Err(io::Error::other(reason));
             }
             Msg::UsbOut(id, op, text) if id == session => {
                 write_frame(&mut s, &Frame::Usb(op, text))?
@@ -1699,13 +1908,8 @@ fn run_session(
             Msg::Input(evs) if screen2_ok && _screen_rx.is_some() => {
                 write_frame(&mut s, &Frame::ScreenInput(evs))?
             }
-            Msg::FromPeer(id, f) if id == session && not_for_us(&f, screen_mine, usb_mine) => {
-                last_rx = Instant::now();
-            }
-            Msg::FromPeer(id, f) if id == session => match {
-                last_rx = Instant::now();
-                f
-            } {
+            Msg::FromPeer(id, f) if id == session && not_for_us(&f, screen_mine, usb_mine) => {}
+            Msg::FromPeer(id, f) if id == session => match f {
                 Frame::Enter(..) if !sh.perms_for(&pid).control_in => {
                     let _ = write_frame(&mut s, &Frame::Reclaim);
                     sh.log("Karşı PC bu PC'yi yönetmek istedi ama ayarlarda kapalı.");
@@ -1715,6 +1919,7 @@ fn run_session(
                         mode = Control::Controlled;
                         (x, y) = place(yf, 0);
                         inj.lock().unwrap().warp(x, y, w, h)?;
+                        flash(eff, x, y);
                         set(mode);
                     } else {
                         write_frame(&mut s, &Frame::Reclaim)?;
@@ -1725,9 +1930,10 @@ fn run_session(
                     inj.lock().unwrap().release_all();
                     set(mode);
                 }
-                Frame::Events(evs)
+                Frame::Events(mut evs)
                     if mode == Control::Controlled && sh.perms_for(&pid).control_in =>
                 {
+                    incoming.apply(&mut evs);
                     let mut leave = false;
                     for &(t, c, v) in &evs {
                         if t == ev::EV_REL {
@@ -1751,6 +1957,7 @@ fn run_session(
                         }
                         send_clip_text(&mut s, sh.shares_text(&pid), &mut clip_sent)?;
                         write_frame(&mut s, &Frame::Leave(along(x, y)))?;
+                        flash(eff, x, y);
                         set(mode);
                     }
                 }
@@ -1762,6 +1969,7 @@ fn run_session(
                         platform::grab(false);
                         (x, y) = place(yf, 1);
                         inj.lock().unwrap().warp(x, y, w, h)?;
+                        flash(eff, x, y);
                     }
                     set(mode);
                 }
@@ -1776,12 +1984,12 @@ fn run_session(
                     thread::spawn(move || crate::clip::set_text(&t));
                 }
                 Frame::Prefs(bits) => {
-                    if primary {
+                    if sh.primary.load(Ordering::Relaxed) == session {
                         *sh.peer_prefs.lock().unwrap() = Some(bits);
                     }
                     sh.update_link(session, |l| l.prefs = Some(bits));
                     let old = pflags;
-                    pflags = (bits as u32 & 0x1F) | flows::SUPPORTS_PREFS;
+                    pflags = updated_peer_flags(pflags, bits);
                     for i in 0..2 {
                         let (now, before) = (pflags & (2 << i) != 0, old & (2 << i) != 0);
                         if !now && before {
@@ -1793,6 +2001,29 @@ fn run_session(
                     }
                 }
                 Frame::Device(op, data) if hardware_ok => {
+                    if metrics_ok && op == hardware::METRICS_SUBSCRIBE {
+                        metrics_requested = data.as_slice() == [1];
+                        continue;
+                    }
+                    if metrics_ok && op == hardware::METRICS_SAMPLE {
+                        let mut peers = sh.metrics_peer.lock().unwrap();
+                        if sh.metrics_show.load(Ordering::Relaxed) {
+                            if let Some(sample) = crate::metrics::Sample::decode(&data) {
+                                peers.insert(
+                                    pid.clone(),
+                                    crate::metrics::TimedSample {
+                                        at: Instant::now(),
+                                        sample,
+                                    },
+                                );
+                            } else {
+                                peers.remove(&pid);
+                            }
+                        } else {
+                            peers.remove(&pid);
+                        }
+                        continue;
+                    }
                     let mut devices = sh.devices.lock().unwrap();
                     let entry = devices.entry(pid.clone()).or_default();
                     let text = String::from_utf8_lossy(&data).into_owned();
@@ -1847,7 +2078,7 @@ fn run_session(
                     }
                 }
                 Frame::Version(v) => {
-                    if primary {
+                    if sh.primary.load(Ordering::Relaxed) == session {
                         *sh.peer_version.lock().unwrap() = Some(v.clone());
                     }
                     sh.update_link(session, |l| l.version = Some(v));
@@ -1883,6 +2114,11 @@ fn run_session(
                     session,
                     &peer_ip,
                     &secret,
+                    if pflags & flows::SUPPORTS_USB2 != 0 {
+                        usb::PORT
+                    } else {
+                        usb::LEGACY_PORT
+                    },
                     &mut usb_client,
                     &mut s,
                 )?,
@@ -1922,8 +2158,24 @@ fn run_session(
                 {
                     sh.log("Karşı PC ses/mikrofon istedi ama ayarlarda izin kapalı; reddedildi.");
                 }
+                Frame::AudioReq(0, true) if initiator && recv[0].is_some() => {
+                    if !echo_warned {
+                        echo_warned = true;
+                        sh.log(ECHO_NOTE);
+                    }
+                }
                 Frame::AudioReq(kind, on) if kind < 2 => {
                     let dev = sh.src.lock().unwrap()[kind as usize].clone();
+                    if kind == 0 && on && recv[0].take().is_some() {
+                        sent[0] = false;
+                        write_frame(&mut s, &Frame::AudioReq(0, false))?;
+                        sh.log(ECHO_NOTE);
+                    }
+                    if !on {
+                        echo_warned = false;
+                    }
+                    let already = on && send[kind as usize].is_some();
+                    send[kind as usize] = None;
                     send[kind as usize] = if on {
                         audio::start_sender(
                             kind,
@@ -1936,7 +2188,7 @@ fn run_session(
                     };
                     let on_air = send[kind as usize].is_some();
                     sh.update_link(session, |l| l.sending[kind as usize] = on_air);
-                    if on {
+                    if on && !already {
                         sh.log(if kind == 0 {
                             "Karşı PC sesinizi istiyor: aktarılıyor."
                         } else {
@@ -2003,6 +2255,15 @@ fn run_session(
                     let (dx, dy) = crate::pointer::motion(&evs);
                     gain.observe(dx, dy, platform::cursor_pos);
                 }
+                if cross && mode == Control::Local {
+                    if let Some((rx, ry)) = platform::cursor_pos() {
+                        if !at_edge(rx, ry, eff, w, h) {
+                            cross = false;
+                        }
+                        x = rx.clamp(0, w - 1);
+                        y = ry.clamp(0, h - 1);
+                    }
+                }
                 match mode {
                     Control::Remote => {
                         if down.contains(&ctrl) && down.contains(&alt) && down.contains(&home) {
@@ -2056,6 +2317,7 @@ fn run_session(
                     }
                     Control::Local
                         if cross
+                            && parent.is_empty()
                             && sh.perms_for(&pid).control_out
                             && pflags & 1 != 0
                             && sh.claim(session) =>
@@ -2070,6 +2332,7 @@ fn run_session(
                         let pos = along(x, y);
                         write_frame(&mut s, &Frame::Enter(pos, eff.to_u8()))?;
                         mirror = edge_point(pos, far_home, 0, pw, ph);
+                        flash(eff, x, y);
                         sh.log(gain.describe());
                         set(mode);
                     }
@@ -2110,10 +2373,10 @@ fn handle_usb(
     session: u64,
     peer_ip: &str,
     secret: &str,
+    port: u16,
     client: &mut Option<usb::Tunnel>,
-    s: &mut Secure,
+    s: &mut impl std::io::Write,
 ) -> io::Result<()> {
-    let allowed = |sh: &Shared, d: &usb::Dev| sh.usb_allowed.lock().unwrap().contains(&d.id);
     match op {
         usb::LIST_REQ => {
             if !sh.perms.lock().unwrap().usb_out {
@@ -2121,40 +2384,70 @@ fn handle_usb(
                 write_frame(s, &Frame::Usb(usb::LIST, String::new()))?;
                 return Ok(());
             }
-            let devs = match usb::list_local() {
-                Ok(v) => v.into_iter().filter(|d| allowed(sh, d)).collect(),
-                Err(e) => {
-                    write_frame(s, &Frame::Usb(usb::FAIL, format!("\tKarşı PC: {e}")))?;
-                    Vec::new()
-                }
-            };
-            write_frame(s, &Frame::Usb(usb::LIST, usb::encode_list(&devs)))?;
+            let (shared, sender) = (sh.clone(), tx.clone());
+            thread::spawn(move || {
+                let allowed = shared.usb_allowed.lock().unwrap().clone();
+                let permitted = shared.perms.lock().unwrap().usb_out;
+                let devs = match usb::list_local() {
+                    Ok(v) => v
+                        .into_iter()
+                        .filter(|d| permitted && allowed.contains(&d.id))
+                        .collect(),
+                    Err(e) => {
+                        let _ = sender.send(Msg::UsbOut(
+                            session,
+                            usb::FAIL,
+                            format!("\tKarşı PC: {e}"),
+                        ));
+                        Vec::new()
+                    }
+                };
+                let _ = sender.send(Msg::UsbOut(session, usb::LIST, usb::encode_list(&devs)));
+            });
         }
         usb::LIST => *sh.usb_remote.lock().unwrap() = Some(usb::decode_list(&text)),
         usb::ATTACH => {
-            let dev = usb::list_local()
-                .ok()
-                .and_then(|v| v.into_iter().find(|d| d.busid == text));
-            let ok =
-                sh.perms.lock().unwrap().usb_out && dev.as_ref().is_some_and(|d| allowed(sh, d));
-            if !ok || !usb::valid_busid(&text) {
+            if !sh.perms.lock().unwrap().usb_out || !usb::valid_busid(&text) {
                 write_frame(
                     s,
                     &Frame::Usb(usb::FAIL, format!("{text}\tbu cihaz paylaşıma açık değil")),
                 )?;
                 return Ok(());
             }
-            let name = dev.map(|d| d.name).unwrap_or_default();
-            sh.log(format!(
-                "Karşı PC USB cihazınızı istiyor: {name}. USB erişim yardımcısı kullanılıyor."
-            ));
             let (sh, tx) = (sh.clone(), tx.clone());
             thread::spawn(move || {
+                let dev = usb::list_local()
+                    .ok()
+                    .and_then(|v| v.into_iter().find(|d| d.busid == text));
+                let permitted = sh.perms.lock().unwrap().usb_out;
+                if !permitted
+                    || !dev
+                        .as_ref()
+                        .is_some_and(|d| sh.usb_allowed.lock().unwrap().contains(&d.id))
+                {
+                    let _ = tx.send(Msg::UsbOut(
+                        session,
+                        usb::FAIL,
+                        format!("{text}\tbu cihaz paylaşıma açık değil veya çıkarılmış"),
+                    ));
+                    return;
+                }
+                let name = dev.map(|d| d.name).unwrap_or_default();
                 let (op, msg) = match usb::bind(&text) {
                     Ok(()) => {
+                        if !sh
+                            .links
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .any(|l| l.session == session)
+                        {
+                            let _ = usb::unbind(&text);
+                            return;
+                        }
                         sh.usb_exported.lock().unwrap().push(text.clone());
                         sh.log(format!(
-                            "USB cihazı karşıya verildi: {name} (bu PC'de artık kullanılamaz)."
+                            "USB cihazı paylaşım için hazır: {name}; karşı PC'nin takması bekleniyor."
                         ));
                         (usb::READY, text)
                     }
@@ -2168,7 +2461,20 @@ fn handle_usb(
         }
         usb::READY if usb::valid_busid(&text) => {
             if client.is_none() {
-                *client = Some(usb::connect(peer_ip.to_owned(), secret.to_owned())?);
+                match usb::connect(peer_ip.to_owned(), secret.to_owned(), port) {
+                    Ok(tunnel) => *client = Some(tunnel),
+                    Err(e) => {
+                        sh.usb_status
+                            .lock()
+                            .unwrap()
+                            .insert(text.clone(), format!("USB tüneli açılamadı: {e}"));
+                        sh.log(format!(
+                            "USB tüneli açılamadı: {e}; PC bağlantısı korunuyor."
+                        ));
+                        write_frame(s, &Frame::Usb(usb::DETACH, text))?;
+                        return Ok(());
+                    }
+                }
             }
             let local = client.as_ref().map(|c| c.local).unwrap();
             let dev = sh
@@ -2189,9 +2495,20 @@ fn handle_usb(
             let (sh, tx) = (sh.clone(), tx.clone());
             thread::spawn(move || match usb::attach(local, &text) {
                 Ok(()) => {
+                    if !sh
+                        .links
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|l| l.session == session)
+                    {
+                        let _ = usb::detach(&text);
+                        return;
+                    }
                     sh.usb_status.lock().unwrap().remove(&text);
                     sh.log(format!("USB cihazı bu bilgisayara takıldı: {}", dev.name));
                     sh.usb_attached.lock().unwrap().push(dev);
+                    let _ = tx.send(Msg::UsbOut(session, usb::ATTACHED, text));
                 }
                 Err(e) => {
                     sh.usb_status
@@ -2202,6 +2519,9 @@ fn handle_usb(
                     let _ = tx.send(Msg::UsbOut(session, usb::DETACH, text));
                 }
             });
+        }
+        usb::ATTACHED if sh.usb_exported.lock().unwrap().contains(&text) => {
+            sh.log(format!("USB cihazı karşı PC'ye takıldı: {text}."));
         }
         usb::FAIL => {
             let (busid, msg) = text.split_once('\t').unwrap_or(("", &text));
@@ -2244,6 +2564,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn changing_permissions_preserves_usb_and_metrics_capabilities() {
+        let flags = flows::SUPPORTS_USB2 | flows::SUPPORTS_METRICS | flows::SUPPORTS_SCREEN2 | 31;
+        let updated = updated_peer_flags(flags, 0);
+        assert_eq!(updated & 31, 0);
+        assert_ne!(updated & flows::SUPPORTS_USB2, 0);
+        assert_ne!(updated & flows::SUPPORTS_METRICS, 0);
+        assert_ne!(updated & flows::SUPPORTS_SCREEN2, 0);
+    }
+
+    #[test]
+    fn usb_tunnel_failure_does_not_close_the_control_channel() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let reader = thread::spawn(move || {
+            let (tcp, _) = listener.accept().unwrap();
+            let mut secure = net::handshake(tcp, false, "usb-control-test").unwrap();
+            assert!(
+                matches!(read_frame(&mut secure).unwrap(), Frame::Usb(usb::DETACH, b) if b == "2-1")
+            );
+            assert!(matches!(read_frame(&mut secure).unwrap(), Frame::Ping));
+        });
+        let mut secure =
+            net::handshake(TcpStream::connect(addr).unwrap(), true, "usb-control-test").unwrap();
+        let shared = Shared::new(false);
+        let (tx, _) = mpsc::channel();
+        let mut client = None;
+        handle_usb(
+            usb::READY,
+            "2-1".into(),
+            &shared,
+            &tx,
+            1,
+            "invalid-ip",
+            "usb-control-test",
+            usb::PORT,
+            &mut client,
+            &mut secure,
+        )
+        .unwrap();
+        assert!(client.is_none());
+        assert!(shared.usb_status.lock().unwrap()["2-1"].contains("tüneli"));
+        write_frame(&mut secure, &Frame::Ping).unwrap();
+        reader.join().unwrap();
+    }
+
+    #[test]
     fn remote_preferences_never_enable_local_permissions() {
         let sh = Shared::new(false);
         for pref in Pref::ALL {
@@ -2274,6 +2640,104 @@ mod tests {
             screen_out: false,
             version: None,
         });
+    }
+
+    #[test]
+    fn primary_disconnect_selects_remaining_device_and_its_preferences_by_identity() {
+        let sh = Shared::new(false);
+        link(&sh, 1, "Same name", Side::Right);
+        link(&sh, 2, "Same name", Side::Left);
+        sh.primary.store(1, Ordering::Relaxed);
+        sh.links.lock().unwrap()[1].prefs = Some(Pref::FilesIn.bit());
+        sh.links.lock().unwrap().remove(0);
+        sh.refresh_state();
+        assert_eq!(sh.primary_link().unwrap().id, "id2");
+        assert!(sh.serves(Feat::Audio, "id2"));
+        assert_eq!(*sh.peer_prefs.lock().unwrap(), Some(Pref::FilesIn.bit()));
+    }
+
+    #[test]
+    fn colliding_live_pcs_form_a_pointer_route_and_restore_saved_positions_after_disconnect() {
+        let sh = Shared::new(false);
+        let mut cfg = Config::default();
+        for session in 1..=3 {
+            cfg.place(&format!("id{session}"), Side::Right, "");
+            link(&sh, session, &format!("PC {session}"), Side::Right);
+        }
+        *sh.config.lock().unwrap() = Some(cfg.clone());
+        let entries: Vec<_> = sh.links.lock().unwrap().drain(..).collect();
+        for entry in entries {
+            sh.add_link(entry).unwrap();
+        }
+        {
+            let links = sh.links.lock().unwrap();
+            assert_eq!(links[0].parent, "");
+            assert_eq!(links[1].parent, "id1");
+            assert_eq!(links[2].parent, "id2");
+        }
+        {
+            let mut links = sh.links.lock().unwrap();
+            links.remove(0);
+            arrange_links(&mut links, Some(&cfg));
+            assert_eq!(links[0].id, "id2");
+            assert_eq!(links[0].parent, "");
+            assert_eq!(links[1].parent, "id2");
+            links.remove(0);
+            arrange_links(&mut links, Some(&cfg));
+            assert_eq!(links[0].id, "id3");
+            assert_eq!(links[0].parent, "");
+        }
+        let saved = sh.config.lock().unwrap();
+        for id in ["id1", "id2", "id3"] {
+            assert_eq!(saved.as_ref().unwrap().parent_of(id), Some(""));
+            assert!(saved.as_ref().unwrap().side_of(id) == Some(Side::Right));
+        }
+    }
+
+    #[test]
+    fn concurrent_connections_reserve_distinct_live_positions() {
+        let sh = Shared::new(false);
+        for session in 1..=8 {
+            link(&sh, session, "PC", Side::Right);
+        }
+        let entries: Vec<_> = sh.links.lock().unwrap().drain(..).collect();
+        let workers: Vec<_> = entries
+            .into_iter()
+            .map(|entry| {
+                let sh = sh.clone();
+                thread::spawn(move || sh.add_link(entry).unwrap())
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let links = sh.links.lock().unwrap();
+        assert_eq!(links.len(), 8);
+        let positions: HashSet<_> = links
+            .iter()
+            .map(|link| (link.parent.clone(), link.side.to_u8()))
+            .collect();
+        assert_eq!(positions.len(), 8);
+        assert_eq!(
+            links.iter().filter(|link| link.parent.is_empty()).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn audio_and_microphone_choices_are_independent_for_each_pc() {
+        let sh = Shared::new(false);
+        link(&sh, 1, "A", Side::Right);
+        link(&sh, 2, "B", Side::Left);
+        sh.primary.store(1, Ordering::Relaxed);
+        assert!(sh.remote_set("id1", Pref::RelayIn, true));
+        assert_eq!(sh.local_prefs_for("id2", 2) & Pref::RelayIn.bit(), 0);
+        assert_ne!(sh.local_prefs_for("id1", 1) & Pref::RelayIn.bit(), 0);
+        assert!(sh.remote_set("id2", Pref::MicIn, true));
+        assert_eq!(sh.local_prefs_for("id1", 1) & Pref::MicIn.bit(), 0);
+        assert_ne!(sh.local_prefs_for("id2", 2) & Pref::MicIn.bit(), 0);
+        assert!(sh.remote_set("id1", Pref::RelayIn, false));
+        assert_ne!(sh.local_prefs_for("id2", 2) & Pref::MicIn.bit(), 0);
     }
 
     #[test]
@@ -2342,9 +2806,9 @@ mod tests {
         assert!(sh.remote_set("id1", Pref::FilesIn, true));
         assert!(sh.perms_for("id1").files_in);
         assert!(sh.remote_set("id1", Pref::RelayIn, true));
-        assert!(sh.want[0].load(Ordering::Relaxed));
+        assert_ne!(sh.local_prefs_for("id1", 1) & Pref::RelayIn.bit(), 0);
         assert_eq!(sh.target(Feat::Audio), "id1");
-        assert!(sh.in_prefs.lock().unwrap().contains(&(Pref::RelayIn, true)));
+        assert!(sh.in_prefs.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -2616,7 +3080,7 @@ mod tests {
             )
             .unwrap();
             let _ = read_frame(&mut sec).unwrap();
-            thread::sleep(Duration::from_secs(9));
+            thread::sleep(Duration::from_secs(20));
         });
         let (s, from) = l.accept().unwrap();
         let lookup = |_: u8, _: &str| Some("ortak-parola-1234".to_string());
@@ -2634,10 +3098,10 @@ mod tests {
         let dt = t0.elapsed();
         assert!(r.is_err(), "oturum hata ile bitmeli");
         assert!(
-            dt < Duration::from_secs(8),
-            "5 sn sessizlikte düşmeli, {dt:?} sürdü"
+            dt < Duration::from_secs(18),
+            "15 sn sessizlikte düşmeli, {dt:?} sürdü"
         );
-        assert!(dt >= Duration::from_secs(4), "çok erken düştü: {dt:?}");
+        assert!(dt >= Duration::from_secs(14), "çok erken düştü: {dt:?}");
         end_session(&sh, &inj, r, 1);
         freezer.join().unwrap();
     }

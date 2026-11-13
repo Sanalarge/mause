@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+#[path = "folder_transfer.rs"]
+mod folder;
 
 pub const FT_PORT: u16 = 24804;
 const MAGIC: &[u8; 4] = b"MFT2";
@@ -16,6 +18,8 @@ const LIST: &[u8; 4] = b"MFL1";
 const GET: &[u8; 4] = b"MFG1";
 const MKDIR: &[u8; 4] = b"MFK1";
 const DELETE: &[u8; 4] = b"MFX1";
+const TREE_PUT: &[u8; 4] = b"MFDP";
+const TREE_GET: &[u8; 4] = b"MFDG";
 const MAX_ENTRIES: usize = 5000;
 const OLD_PEER: &str =
     "Karşı cihazdaki Mause bu işlemi desteklemiyor; karşıda Mause'u güncelleyin.";
@@ -90,8 +94,8 @@ pub fn inbox() -> PathBuf {
 fn safe_name(n: &str) -> String {
     let base = n.rsplit(['/', '\\']).next().unwrap_or("dosya");
     let base: String = base.chars().filter(|c| !c.is_control()).collect();
-    let base = base.trim().trim_start_matches('.');
-    if base.is_empty() {
+    let base = base.trim();
+    if base.is_empty() || base == "." || base == ".." {
         "dosya".into()
     } else {
         base.chars().take(200).collect()
@@ -284,6 +288,10 @@ fn push(
     dest: Option<String>,
     done: impl FnOnce() + Send + 'static,
 ) {
+    if path.is_dir() {
+        folder::upload(sh, path, carry, dest, done);
+        return;
+    }
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -457,6 +465,16 @@ pub fn download(
     });
 }
 
+pub fn download_folder(
+    sh: Arc<Shared>,
+    remote_dir: String,
+    name: String,
+    dest_dir: PathBuf,
+    done: impl FnOnce() + Send + 'static,
+) {
+    folder::download(sh, remote_dir, name, dest_dir, done);
+}
+
 fn save_stream(
     sh: &Shared,
     s: &mut impl Read,
@@ -560,9 +578,11 @@ fn receive(sh: Arc<Shared>, raw: TcpStream, secret: String) {
             let _ = serve_list(&mut s);
         }
         GET if perms.files_in => serve_get(&sh, &mut s),
+        TREE_PUT if perms.files_in => folder::receive(sh, s),
+        TREE_GET if perms.files_in => folder::serve_get(&sh, &mut s),
         MKDIR if perms.files_in => serve_change(&sh, &mut s, true),
         DELETE if perms.files_in => serve_change(&sh, &mut s, false),
-        LIST | GET | PUT | MKDIR | DELETE => {
+        LIST | GET | PUT | MKDIR | DELETE | TREE_PUT | TREE_GET => {
             let _ = get_str(&mut s)
                 .and_then(|_| get_str(&mut s))
                 .and_then(|_| write_error(&mut s, NO_BROWSE));
