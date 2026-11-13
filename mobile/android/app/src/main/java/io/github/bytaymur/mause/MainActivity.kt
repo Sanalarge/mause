@@ -5,8 +5,8 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
-import android.os.Build
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
@@ -15,39 +15,6 @@ import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color as ComposeColor
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 class MainActivity : ComponentActivity() {
     private val notificationPermission = registerForActivityResult(
@@ -104,28 +71,34 @@ class MainActivity : ComponentActivity() {
         refreshCapabilities()
         setContent {
             MauseTheme {
-                MauseScreen(
+                MauseApp(
+                    version = appVersion(),
                     onStart = ::startAgent,
                     onStop = ::stopAgent,
-                    onAccessibility = {
-                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    },
-                    onKeyboard = {
-                        startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
-                    },
-                    onAppInfo = {
-                        startActivity(
-                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                                .setData(Uri.fromParts("package", packageName, null)),
-                        )
-                    },
                     onPairAnswer = AgentService::answerPair,
-                    onLayout = { KeyboardInput.choose(this, it) },
                     share = shareActions(),
+                    system = SystemActions(
+                        onAccessibility = {
+                            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        },
+                        onKeyboard = {
+                            startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+                        },
+                        onAppInfo = {
+                            startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                    .setData(Uri.fromParts("package", packageName, null)),
+                            )
+                        },
+                        onLayout = { KeyboardInput.choose(this, it) },
+                    ),
                 )
             }
         }
     }
+
+    private fun appVersion(): String =
+        runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
 
     override fun onResume() {
         super.onResume()
@@ -225,242 +198,4 @@ class MainActivity : ComponentActivity() {
                 PackageManager.PERMISSION_GRANTED
         }
     }
-}
-
-@Composable
-private fun MauseScreen(
-    onStart: () -> Unit,
-    onStop: () -> Unit,
-    onAccessibility: () -> Unit,
-    onKeyboard: () -> Unit,
-    onAppInfo: () -> Unit,
-    onPairAnswer: (Boolean) -> Unit,
-    onLayout: (KeyLayout) -> Unit,
-    share: ShareActions,
-) {
-    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(
-            modifier = Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Image(
-                    painter = painterResource(R.drawable.ic_mause),
-                    contentDescription = null,
-                    modifier = Modifier.size(42.dp),
-                )
-                Text(
-                    "mause",
-                    modifier = Modifier.padding(start = 12.dp),
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 23.sp,
-                )
-            }
-
-            Text("Android cihaz", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-            Text(
-                "Bilgisayarınızdaki fare ve klavyeyi bu cihazda kullanın. Dosya, ses ve ekran paylaşımı siz açana kadar kapalıdır.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                lineHeight = 22.sp,
-            )
-
-            StatusCard()
-
-            CapabilityCard(
-                title = "Fare ve dokunma",
-                description = "İmleç, tıklama ve kaydırma için erişilebilirlik servisi gerekir.",
-                ready = AgentState.accessibilityReady,
-                action = "İzin ver",
-                onClick = onAccessibility,
-                note = "İzin \"kısıtlı ayar\" diye engellenirse: Uygulama bilgisi → sağ üstteki üç nokta → Kısıtlanmış ayarlara izin ver. Sonra İzin ver'e yeniden basın.",
-                secondAction = "Uygulama bilgisi",
-                onSecondClick = onAppInfo,
-            )
-            KeyboardCard(onKeyboard = onKeyboard, onLayout = onLayout)
-            RemoteCard(share)
-            FilesCard(share)
-            HardwareCard(share)
-            AudioCard(share)
-            ScreenCard(share)
-            ComputerScreenCard(share)
-            ActivityCard()
-
-            Spacer(Modifier.height(4.dp))
-            if (AgentState.running) {
-                OutlinedButton(onClick = onStop, modifier = Modifier.fillMaxWidth()) {
-                    Text("Bağlantıyı durdur")
-                }
-            } else {
-                Button(
-                    onClick = onStart,
-                    enabled = AgentState.accessibilityReady,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = ComposeColor.Black,
-                    ),
-                ) {
-                    Text("Bu cihazı kullanıma aç")
-                }
-            }
-        }
-    }
-
-    AgentState.pairRequest?.let { request ->
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("Bilgisayarı eşleştir") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("${request.computer} bu cihazı kontrol etmek istiyor.")
-                    Text(request.code, fontSize = 32.sp, fontWeight = FontWeight.Bold)
-                    Text("Aynı kod bilgisayarda görünüyorsa onaylayın.")
-                }
-            },
-            confirmButton = {
-                Button(onClick = { onPairAnswer(true) }) { Text("Eşleştir") }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { onPairAnswer(false) }) { Text("Reddet") }
-            },
-        )
-    }
-}
-
-@Composable
-private fun StatusCard() {
-    val tone = when {
-        AgentState.connected -> ComposeColor(0xFF9BE000)
-        AgentState.running -> ComposeColor(0xFFFF9800)
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(10.dp).background(tone, RoundedCornerShape(5.dp)))
-            Column(Modifier.padding(start = 14.dp)) {
-                Text(if (AgentState.connected) "Bağlı" else "Bağlantı durumu", fontWeight = FontWeight.SemiBold)
-                Text(AgentState.status, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-            }
-        }
-    }
-}
-
-@Composable
-private fun CapabilityCard(
-    title: String,
-    description: String,
-    ready: Boolean,
-    action: String,
-    onClick: () -> Unit,
-    note: String? = null,
-    secondAction: String? = null,
-    onSecondClick: () -> Unit = {},
-) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(title, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                Text(
-                    if (ready) "Hazır" else "Gerekli",
-                    color = if (ready) ComposeColor(0xFF9BE000) else MaterialTheme.colorScheme.primary,
-                    fontSize = 13.sp,
-                )
-            }
-            Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-            if (!ready) {
-                note?.let {
-                    Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 17.sp)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(onClick = onClick) { Text(action) }
-                    secondAction?.let {
-                        OutlinedButton(onClick = onSecondClick) { Text(it) }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun KeyboardCard(onKeyboard: () -> Unit, onLayout: (KeyLayout) -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Klavye", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                Text(
-                    if (AgentState.accessibilityReady) "Hazır" else "Fare izni gerekli",
-                    color = if (AgentState.accessibilityReady) ComposeColor(0xFF9BE000) else MaterialTheme.colorScheme.primary,
-                    fontSize = 13.sp,
-                )
-            }
-            Text(
-                "Bilgisayar klavyesiyle odaklanan metin kutusuna yazılır. Bilgisayarınızın klavye düzenini seçin.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                KeyLayout.entries.forEach { option ->
-                    val selected = AgentState.keyboardLayout == option
-                    if (selected) {
-                        Button(
-                            onClick = { onLayout(option) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = ComposeColor.Black,
-                            ),
-                        ) { Text(option.title) }
-                    } else {
-                        OutlinedButton(onClick = { onLayout(option) }) { Text(option.title) }
-                    }
-                }
-            }
-            Text(
-                if (AgentState.keyboardReady) {
-                    "Mause Klavye etkin: yukarı ve aşağı ok tuşları da çalışır."
-                } else {
-                    "İsteğe bağlı: yukarı ve aşağı ok tuşları için Mause Klavye'yi etkinleştirip klavye olarak seçin."
-                },
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
-            )
-            if (!AgentState.keyboardReady) {
-                OutlinedButton(onClick = onKeyboard) { Text("Mause Klavye") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MauseTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = ComposeColor(0xFFFF9800),
-            background = ComposeColor(0xFF0F0F12),
-            surface = ComposeColor(0xFF1C1C20),
-            onBackground = ComposeColor(0xFFF4F2F6),
-            onSurface = ComposeColor(0xFFF4F2F6),
-            onSurfaceVariant = ComposeColor(0xFFA9A5AF),
-        ),
-        content = content,
-    )
 }

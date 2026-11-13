@@ -2,6 +2,7 @@ package io.github.bytaymur.mause
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -10,14 +11,14 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -37,37 +38,61 @@ class ShareActions(
     val onShareDevice: (Boolean) -> Unit,
 )
 
-private val Ready = Color(0xFF9BE000)
+class SystemActions(
+    val onAccessibility: () -> Unit,
+    val onKeyboard: () -> Unit,
+    val onAppInfo: () -> Unit,
+    val onLayout: (KeyLayout) -> Unit,
+)
 
 @Composable
-private fun ShareCard(title: String, ready: Boolean, content: @Composable () -> Unit) {
+fun PanelCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(containerColor = MauseColors.Surface),
         shape = RoundedCornerShape(18.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(title, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                Text(
-                    if (ready) "Açık" else "Kapalı",
-                    color = if (ready) Ready else MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp,
-                )
-            }
-            content()
-        }
+        Column(
+            Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            content = content,
+        )
     }
 }
 
 @Composable
-private fun Note(text: String) {
-    Text(
-        text,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontSize = 13.sp,
-        lineHeight = 18.sp,
-    )
+fun Note(text: String) {
+    Text(text, color = MauseColors.Muted, fontSize = 13.sp, lineHeight = 19.sp)
+}
+
+@Composable
+fun PrimaryButton(text: String, onClick: () -> Unit, enabled: Boolean = true, modifier: Modifier = Modifier) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MauseColors.Accent,
+            contentColor = MauseColors.OnAccent,
+            disabledContainerColor = MauseColors.Inset,
+            disabledContentColor = MauseColors.Muted,
+        ),
+    ) { Text(text, fontWeight = FontWeight.Medium) }
+}
+
+@Composable
+fun SecondaryButton(text: String, onClick: () -> Unit, enabled: Boolean = true, modifier: Modifier = Modifier) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.outlinedButtonColors(
+            contentColor = MauseColors.Ink,
+            disabledContentColor = MauseColors.Muted,
+        ),
+    ) { Text(text, fontWeight = FontWeight.Medium) }
 }
 
 @Composable
@@ -79,23 +104,74 @@ private fun SwitchRow(
 ) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(label, fontSize = 15.sp)
-            detail?.let {
-                Text(
-                    it,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp,
-                )
-            }
+            Text(label, fontSize = 15.sp, color = MauseColors.Ink)
+            detail?.let { Text(it, color = MauseColors.Muted, fontSize = 12.sp, lineHeight = 17.sp) }
         }
-        Switch(checked = checked, onCheckedChange = onChange)
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = MauseColors.OnAccent,
+                checkedTrackColor = MauseColors.Accent,
+                uncheckedThumbColor = MauseColors.Muted,
+                uncheckedTrackColor = MauseColors.Inset,
+                uncheckedBorderColor = MauseColors.RuleStrong,
+            ),
+        )
     }
 }
 
 @Composable
-fun RemoteCard(actions: ShareActions) {
-    ShareCard("Bilgisayarla ortak ayar", AgentState.remotePrefs) {
+private fun Divider() {
+    HorizontalDivider(color = MauseColors.Rule)
+}
+
+@Composable
+fun PointerPanel(system: SystemActions) {
+    PanelCard {
+        Note("İmleç, tıklama ve kaydırma için Android erişilebilirlik servisi gerekir.")
+        if (!AgentState.accessibilityReady) {
+            Note("İzin \"kısıtlı ayar\" diye engellenirse: Uygulama bilgisi → sağ üstteki üç nokta → Kısıtlanmış ayarlara izin ver. Sonra İzin ver'e yeniden basın.")
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                PrimaryButton("İzin ver", system.onAccessibility)
+                SecondaryButton("Uygulama bilgisi", system.onAppInfo)
+            }
+        } else {
+            Text("Erişilebilirlik servisi açık.", color = MauseColors.Ok, fontSize = 13.sp)
+        }
+    }
+}
+
+@Composable
+fun KeyboardPanel(system: SystemActions) {
+    PanelCard {
+        Note("Bilgisayar klavyesiyle odaklanan metin kutusuna yazılır. Bilgisayarınızın klavye düzenini seçin.")
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            KeyLayout.entries.forEach { option ->
+                if (AgentState.keyboardLayout == option) {
+                    PrimaryButton(option.title, { system.onLayout(option) })
+                } else {
+                    SecondaryButton(option.title, { system.onLayout(option) })
+                }
+            }
+        }
+        Divider()
+        Note(
+            if (AgentState.keyboardReady) {
+                "Mause Klavye etkin: yukarı ve aşağı ok tuşları da çalışır."
+            } else {
+                "İsteğe bağlı: yukarı ve aşağı ok tuşları için Mause Klavye'yi etkinleştirip klavye olarak seçin."
+            },
+        )
+        if (!AgentState.keyboardReady) {
+            SecondaryButton("Mause Klavye", system.onKeyboard)
+        }
+    }
+}
+
+@Composable
+fun RemotePanel(actions: ShareActions) {
+    PanelCard {
         SwitchRow(
             "Bilgisayar paylaşım ayarlarımı değiştirebilsin",
             AgentState.remotePrefs,
@@ -106,27 +182,22 @@ fun RemoteCard(actions: ShareActions) {
 }
 
 @Composable
-fun FilesCard(actions: ShareActions) {
-    ShareCard("Dosyalar", AgentState.filesAllowed) {
+fun FilesPanel(actions: ShareActions) {
+    PanelCard {
         Note("Bilgisayar bu cihazın dosyalarını görüp indirebilir ve dosya yükleyebilir. Bilgisayardan gelen dosyalar İndirilenler/Mause klasörüne kaydedilir.")
-        SwitchRow(
-            "Bilgisayarın dosyalara erişmesine izin ver",
-            AgentState.filesAllowed,
-            actions.onFiles,
-        )
+        SwitchRow("Bilgisayarın dosyalara erişmesine izin ver", AgentState.filesAllowed, actions.onFiles)
         if (AgentState.filesAllowed && !AgentState.storageReady) {
             Note("Tüm dosyalara erişim izni olmadan yalnızca Mause'un kendi klasörü paylaşılır.")
-            OutlinedButton(onClick = actions.onStorage) { Text("Tüm dosyalara erişim izni") }
+            SecondaryButton("Tüm dosyalara erişim izni", actions.onStorage)
         }
-        OutlinedButton(onClick = actions.onSendFiles, enabled = AgentState.connected) {
-            Text("Bilgisayara dosya gönder")
-        }
+        Divider()
+        SecondaryButton("Bilgisayara dosya gönder", actions.onSendFiles, enabled = AgentState.connected)
     }
 }
 
 @Composable
-fun AudioCard(actions: ShareActions) {
-    ShareCard("Ses", AgentState.shareAudio || AgentState.shareMic || AgentState.playPcAudio) {
+fun AudioPanel(actions: ShareActions) {
+    PanelCard {
         SwitchRow(
             "Bu cihazın sesini bilgisayara gönder",
             AgentState.shareAudio,
@@ -134,50 +205,34 @@ fun AudioCard(actions: ShareActions) {
             detail = "Ekran yakalama izni ve mikrofon izni gerekir.",
         )
         if (AgentState.shareAudio && !AgentState.captureReady) {
-            Note("Cihaz sesi için aşağıdaki Ekran kartından yakalama iznini hazırlayın.")
+            Note("Cihaz sesi için Ayarlar → Ekran bölümünden yakalama iznini hazırlayın.")
         }
-        SwitchRow(
-            "Mikrofonu bilgisayara gönder",
-            AgentState.shareMic,
-            actions.onShareMic,
-        )
-        SwitchRow(
-            "Bilgisayarın sesini bu cihazda çal",
-            AgentState.playPcAudio,
-            actions.onPlayAudio,
-        )
+        Divider()
+        SwitchRow("Mikrofonu bilgisayara gönder", AgentState.shareMic, actions.onShareMic)
+        Divider()
+        SwitchRow("Bilgisayarın sesini bu cihazda çal", AgentState.playPcAudio, actions.onPlayAudio)
     }
 }
 
 @Composable
-fun ScreenCard(actions: ShareActions) {
-    ShareCard("Ekran", AgentState.shareScreen && AgentState.captureReady) {
+fun ScreenPanel(actions: ShareActions) {
+    PanelCard {
         Note("Bilgisayardan bu cihazın ekranını izleyin. Erişilebilirlik servisi açıksa bilgisayardan dokunma ve klavye de çalışır.")
         if (!AgentState.captureReady) {
             Note("Android ekran yakalama için onay ister. Onay, Mause durdurulunca sıfırlanır.")
-            Button(
-                onClick = actions.onPrepareCapture,
-                enabled = AgentState.running,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = Color.Black,
-                ),
-            ) { Text("Ekran yakalamayı hazırla") }
+            PrimaryButton("Ekran yakalamayı hazırla", actions.onPrepareCapture, enabled = AgentState.running)
         }
-        SwitchRow(
-            "Bilgisayarın ekranı izlemesine izin ver",
-            AgentState.shareScreen,
-            actions.onShareScreen,
-        )
+        Divider()
+        SwitchRow("Bilgisayarın ekranı izlemesine izin ver", AgentState.shareScreen, actions.onShareScreen)
         if (AgentState.screenLive) {
-            Text("Ekran şu an bilgisayara aktarılıyor", color = Ready, fontSize = 13.sp)
+            Text("Ekran şu an bilgisayara aktarılıyor", color = MauseColors.Ok, fontSize = 13.sp)
         }
     }
 }
 
 @Composable
-fun HardwareCard(actions: ShareActions) {
-    ShareCard("Donanım", AgentState.shareCamera || AgentState.shareDevice) {
+fun HardwarePanel(actions: ShareActions) {
+    PanelCard {
         Note("Bilgisayar bu cihazın kameralarını canlı izleyebilir, el fenerini açıp titreşimi çalıştırabilir, pil ve konum bilgisini görebilir. Bilgisayarda cihazın monitör kartına tıklayınca menüde çıkar.")
         SwitchRow(
             "Kameraları bilgisayarla paylaş",
@@ -185,6 +240,7 @@ fun HardwareCard(actions: ShareActions) {
             actions.onShareCamera,
             detail = "Kamera izni gerekir. Kamera yalnız bilgisayardan açılınca çalışır.",
         )
+        Divider()
         SwitchRow(
             "El feneri, titreşim, pil ve konum",
             AgentState.shareDevice,
@@ -195,36 +251,11 @@ fun HardwareCard(actions: ShareActions) {
 }
 
 @Composable
-fun ComputerScreenCard(actions: ShareActions) {
-    ShareCard("Bilgisayarın ekranı", AgentState.viewFrame != null) {
-        Note("Bağlı bilgisayarın ekranını bu cihazda akıcı video olarak izleyin ve dokunarak kullanın: dokunma sol tık, uzun basma sağ tık, sürükleme basılı tutarak sürükleme.")
-        Note("Bilgisayarda bu cihazın altındaki üst satırdan Ekran simgesi açık olmalı. İkinci monitör için bilgisayar Linux Wayland (KDE ya da GNOME) olmalı; ilk kullanımda masaüstü bir paylaşım onayı sorar.")
-        Button(
-            onClick = { actions.onViewScreen(false) },
-            enabled = AgentState.connected,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = Color.Black,
-            ),
-        ) { Text("Ekranı yansıt") }
-        OutlinedButton(
-            onClick = { actions.onViewScreen(true) },
-            enabled = AgentState.connected,
-        ) { Text("İkinci monitör olarak kullan") }
-    }
-}
-
-@Composable
-fun ActivityCard() {
-    if (AgentState.activity.isEmpty()) return
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Son işlemler", fontWeight = FontWeight.SemiBold)
-            AgentState.activity.forEach { Note(it) }
-        }
+fun AboutPanel(version: String, system: SystemActions) {
+    PanelCard {
+        Text("Mause $version", color = MauseColors.Ink, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+        Note("Bilgisayarınızdaki fare ve klavyeyi bu cihazda kullanın. Dosya, ses, ekran ve donanım paylaşımı siz açana kadar kapalıdır.")
+        Note("Geliştirenler: Muhammed Taymur ve Serdar Kayışkıran")
+        SecondaryButton("Uygulama bilgisi", system.onAppInfo)
     }
 }
