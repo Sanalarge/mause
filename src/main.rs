@@ -26,6 +26,7 @@ mod gui;
 mod hardware;
 mod keymap;
 mod logo;
+mod metrics;
 mod net;
 mod platform;
 mod pointer;

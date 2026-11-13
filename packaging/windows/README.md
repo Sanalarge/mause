@@ -1,5 +1,25 @@
 # Windows setup
 
+## Performans göstergeleri ve USB
+
+Ayarlar → **Performans göstergeleri** bölümünde bu PC'nin toplam kullanım
+verilerini paylaşma ve bağlı PC'lerin verilerini gösterme ayrı ayrı açılır.
+İkisi de varsayılan olarak kapalıdır. İşlemci, RAM, GPU, disk ve ağ ikonları
+ayrı ayrı seçilebilir; ikonların üzerine gelince kullanım ve aktarım hızları
+görünür. Veriler yaklaşık iki saniyede bir şifreli bağlantı üzerinden gönderilir.
+GPU değeri birden fazla GPU varsa en yoğun GPU'nun kullanımıdır; bellek ve
+disk değerleri toplamdır. Ağ değerleri anlık trafik hızlarıdır, internet hız
+testi değildir. Desteklenmeyen veya eski ölçümler sayı yerine ‘—’ gösterir.
+Küçük cihaz kartlarında ikon satırı yer yoksa gösterilmez.
+
+USB aktarımında iki PC de güncel Mause kullanmalıdır. Yeni USB tüneli TCP
+24808 kullanır; kamera akışı 24807'de kalır. Windows istemcisinin yerel ucu
+boş bir loopback portu seçer, böylece usbipd servisinin 3240 portuyla çakışmaz.
+Takma hataları ana PC bağlantısını düşürmez ve başarısız takma işlemi arka
+planda sürekli tekrarlanmaz. Cihaz ancak istemci takmayı doğrulayınca takılı
+gösterilir. Kaynak PC'deki cihaz listeleme ve hazırlama işlemleri ana bağlantı
+döngüsünü bekletmez.
+
 ## Ek monitör ve mevcut ekran
 
 İki PC'ye de güncel Mause kurulmalıdır. Masaüstü genişletilecek Windows PC'de

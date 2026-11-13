@@ -343,6 +343,13 @@ impl App {
 
     fn sync_perms(&self) {
         if let Some(sh) = &self.shared {
+            sh.metrics_share
+                .store(self.cfg.share_metrics, Ordering::Relaxed);
+            sh.metrics_show
+                .store(self.cfg.show_metrics, Ordering::Relaxed);
+            if !self.cfg.show_metrics {
+                sh.metrics_peer.lock().unwrap().clear();
+            }
             *sh.perms.lock().unwrap() = Perms::from_cfg(&self.cfg);
             sh.remote_prefs
                 .store(self.cfg.allow_remote_prefs, Ordering::Relaxed);
@@ -1255,6 +1262,7 @@ fn monitor(
     sub: &str,
     sub_color: Color32,
     border: Color32,
+    performance: bool,
 ) {
     let neck = egui::Rect::from_min_size(
         egui::pos2(screen.center().x - 5.0, screen.bottom()),
@@ -1285,13 +1293,13 @@ fn monitor(
     painter.galley(
         egui::pos2(
             screen.center().x - galley.size().x / 2.0,
-            screen.center().y - 20.0,
+            screen.center().y - if performance { 0.0 } else { 20.0 },
         ),
         galley,
         palette.ink,
     );
     painter.text(
-        screen.center() + Vec2::new(0.0, 10.0),
+        screen.center() + Vec2::new(0.0, if performance { 22.0 } else { 10.0 }),
         Align2::CENTER_CENTER,
         sub,
         FontId::proportional(12.0),
@@ -3247,7 +3255,157 @@ impl App {
         self.kvm_layout(ui, state, running);
     }
 
+    fn performance_visible(&self, rect: egui::Rect) -> bool {
+        self.cfg.show_metrics
+            && self.cfg.metrics_mask != 0
+            && rect.height() >= 84.0
+            && rect.width() >= 110.0
+    }
+
+    fn performance_row(
+        &self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        palette: Palette,
+        rect: egui::Rect,
+        peer: Option<&str>,
+    ) {
+        if !self.performance_visible(rect) {
+            return;
+        }
+        let sample = self
+            .shared
+            .as_ref()
+            .and_then(|sh| match peer {
+                Some(id) => sh.metrics_peer.lock().unwrap().get(id).cloned(),
+                None => sh.metrics_local.lock().unwrap().clone(),
+            })
+            .filter(|s| s.at.elapsed() < Duration::from_secs(6));
+        let count = self.cfg.metrics_mask.count_ones() as f32;
+        let cell = ((rect.width() - 20.0) / count).min(34.0);
+        let left = rect.center().x - count * cell / 2.0;
+        let mut column = 0;
+        for (category, name) in ["İşlemci", "RAM", "GPU", "Disk", "Ağ"].iter().enumerate() {
+            if self.cfg.metrics_mask & (1 << category) == 0 {
+                continue;
+            }
+            let center = egui::pos2(left + (column as f32 + 0.5) * cell, rect.top() + 15.0);
+            column += 1;
+            let value = sample.as_ref().and_then(|s| s.sample.ratio(category));
+            let color = if sample.is_none() {
+                palette.muted
+            } else if value.is_some_and(|v| v >= 0.9) {
+                palette.warn
+            } else {
+                palette.ink2
+            };
+            match category {
+                0 => {
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(center, Vec2::splat(8.0)),
+                        1,
+                        Stroke::new(1.2, color),
+                        StrokeKind::Inside,
+                    );
+                    for d in [-2.0, 2.0] {
+                        for side in [-1.0, 1.0] {
+                            painter.line_segment(
+                                [
+                                    center + Vec2::new(d, side * 4.0),
+                                    center + Vec2::new(d, side * 6.0),
+                                ],
+                                Stroke::new(1.0, color),
+                            );
+                            painter.line_segment(
+                                [
+                                    center + Vec2::new(side * 4.0, d),
+                                    center + Vec2::new(side * 6.0, d),
+                                ],
+                                Stroke::new(1.0, color),
+                            );
+                        }
+                    }
+                }
+                1 => {
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(center, Vec2::new(13.0, 7.0)),
+                        1,
+                        Stroke::new(1.0, color),
+                        StrokeKind::Inside,
+                    );
+                    for x in [-4.0, 0.0, 4.0] {
+                        painter.rect_filled(
+                            egui::Rect::from_center_size(
+                                center + Vec2::new(x, 0.0),
+                                Vec2::new(2.0, 3.0),
+                            ),
+                            0,
+                            color,
+                        );
+                    }
+                }
+                2 => {
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(center, Vec2::new(14.0, 9.0)),
+                        1,
+                        Stroke::new(1.0, color),
+                        StrokeKind::Inside,
+                    );
+                    painter.circle_stroke(center, 2.5, Stroke::new(1.0, color));
+                }
+                3 => {
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(center, Vec2::new(11.0, 13.0)),
+                        2,
+                        Stroke::new(1.0, color),
+                        StrokeKind::Inside,
+                    );
+                    painter.circle_stroke(
+                        center + Vec2::new(0.0, -1.0),
+                        3.0,
+                        Stroke::new(1.0, color),
+                    );
+                }
+                _ => design::icon(painter, center, Icon::Link, color, 14.0),
+            }
+            let label = value.map_or_else(
+                || {
+                    if sample.is_some() && category == 4 {
+                        "↕".into()
+                    } else {
+                        "—".into()
+                    }
+                },
+                |v| format!("{:.0}%", v * 100.0),
+            );
+            painter.text(
+                center + Vec2::new(0.0, 13.0),
+                Align2::CENTER_CENTER,
+                label,
+                FontId::proportional(9.0),
+                color,
+            );
+            let detail = sample.as_ref().map_or_else(|| if peer.is_some() { "Karşı PC performans paylaşımı kapalı, desteklenmiyor veya ölçüm bekleniyor.".to_owned() } else { "Ölçüm bekleniyor.".to_owned() }, |s| s.sample.detail(category));
+            let response = ui.interact(
+                egui::Rect::from_center_size(
+                    center + Vec2::new(0.0, 6.0),
+                    Vec2::new(cell - 2.0, 30.0),
+                ),
+                ui.scope_id()
+                    .with(("performance", peer.unwrap_or("local"), category)),
+                Sense::hover(),
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{name}: {detail}"))
+            });
+            response.on_hover_text(detail);
+        }
+    }
+
     fn kvm_layout(&mut self, ui: &mut egui::Ui, state: &State, running: bool) {
+        if ui.checkbox(&mut self.cfg.show_metrics, "Cihaz performanslarını göster").on_hover_text("İşlemci, RAM, GPU, disk ve ağ göstergeleri. Karşı PC de kendi performans paylaşımını açmalıdır.").changed() {
+            self.sync_perms();
+        }
         let palette = Palette::of(ui);
         let links: Vec<core::Link> = self
             .shared
@@ -3331,7 +3489,9 @@ impl App {
             "Bu bilgisayar",
             palette.ink2,
             palette.rule_strong,
+            self.performance_visible(own),
         );
+        self.performance_row(ui, &painter, palette, own, None);
 
         let mut action: Option<LayoutAction> = None;
         for node in &nodes {
@@ -3696,10 +3856,17 @@ impl App {
             node.status,
             node.tone,
             border,
+            node.live && self.performance_visible(rect),
         );
-        let r = r
-            .on_hover_text(format!("{}: {}", node.name, node.status))
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if node.live {
+            self.performance_row(ui, painter, palette, rect, Some(&node.id));
+        }
+        let r = if node.live && self.performance_visible(rect) {
+            r
+        } else {
+            r.on_hover_text(format!("{}: {}", node.name, node.status))
+        };
+        let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
         let mut chosen = node
             .link
             .as_ref()
@@ -6059,6 +6226,27 @@ impl App {
         self.secret_section(ui);
         self.roles_section(ui);
         self.screen_section(ui);
+        section(ui, Some("Performans göstergeleri"), |ui| {
+            let mut changed = toggle_row(ui, "Bu PC'nin performansını bağlı cihazlarla paylaş", Some("Yalnızca toplam kullanım değerleri paylaşılır. İşlem, dosya ve ağ adresi listeleri gönderilmez."), &mut self.cfg.share_metrics, true).changed();
+            changed |= toggle_row(ui, "Cihaz kartlarında performansı göster", Some("Değerler yaklaşık iki saniyede bir güncellenir. Karşı PC paylaşımı kapatabilir."), &mut self.cfg.show_metrics, true).changed();
+            ui.horizontal_wrapped(|ui| {
+                for (index, label) in ["İşlemci", "RAM", "GPU", "Disk", "Ağ"].iter().enumerate()
+                {
+                    let mut on = self.cfg.metrics_mask & (1 << index) != 0;
+                    if ui.checkbox(&mut on, *label).changed() {
+                        if on {
+                            self.cfg.metrics_mask |= 1 << index;
+                        } else {
+                            self.cfg.metrics_mask &= !(1 << index);
+                        }
+                        changed = true;
+                    }
+                }
+            });
+            if changed {
+                self.sync_perms();
+            }
+        });
 
         section(ui, Some("Bağlantı izinleri"), |ui| {
             let mut req = self.cfg.require_approval;
@@ -6651,13 +6839,18 @@ impl App {
                     }
                 });
                 setting_row(ui, &d.name, Some(&note), 110.0, |ui| {
+                    let busy = status.get(&d.busid).is_some_and(|s| s.ends_with('…'));
                     let (label, op) = if on {
                         ("Çıkar", usb::DETACH)
                     } else {
                         ("Bağla", usb::ATTACH)
                     };
                     let kind = if on { KeyKind::Plain } else { KeyKind::Primary };
-                    if design::key(ui, label, kind, true, 0.0).clicked() {
+                    if design::key(ui, label, kind, !busy, 0.0).clicked() {
+                        sh.usb_status
+                            .lock()
+                            .unwrap()
+                            .insert(d.busid.clone(), "işlem bekliyor…".into());
                         sh.usb_cmds.lock().unwrap().push((op, d.busid.clone()));
                     }
                 });
@@ -7067,6 +7260,52 @@ mod layout_tests {
 
     fn fixture(page: Page, theme: u8) -> App {
         ui_fixture(page, theme)
+    }
+
+    #[test]
+    fn performance_icons_expose_measurements_and_respect_category_selection() {
+        let mut app = fixture(Page::Share, 1);
+        app.cfg.show_metrics = true;
+        let sh = Shared::new(false);
+        let mut sample = crate::metrics::Sample::default();
+        sample.values[crate::metrics::CPU] = Some(2300);
+        *sh.metrics_local.lock().unwrap() = Some(crate::metrics::TimedSample {
+            at: Instant::now(),
+            sample,
+        });
+        app.shared = Some(sh);
+        for mask in [crate::metrics::ALL, 1] {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            apply_style(&ctx, 1);
+            app.cfg.metrics_mask = mask;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(220.0, 150.0),
+                )),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let rect =
+                    egui::Rect::from_min_size(egui::pos2(10.0, 10.0), Vec2::new(190.0, 115.0));
+                app.performance_row(ui, &ui.painter().clone(), Palette::of(ui), rect, None);
+            });
+            let update = output.platform_output.accesskit_update.take().unwrap();
+            assert!(update.nodes.iter().any(|(_, n)| {
+                n.value()
+                    .or(n.label())
+                    .is_some_and(|l| l.contains("İşlemci kullanımı: %23"))
+            }));
+            assert_eq!(
+                update.nodes.iter().any(|(_, n)| n
+                    .value()
+                    .or(n.label())
+                    .is_some_and(|l| l.starts_with("RAM:"))),
+                mask == crate::metrics::ALL
+            );
+            output.textures_delta.clear();
+        }
     }
 
     #[test]

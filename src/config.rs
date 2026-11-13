@@ -59,6 +59,9 @@ pub struct Config {
     pub carry_files: bool,
     pub auto_connect: bool,
     pub share_text: bool,
+    pub share_metrics: bool,
+    pub show_metrics: bool,
+    pub metrics_mask: u8,
     pub id: String,
     pub require_approval: bool,
     pub trusted: Vec<(String, String)>,
@@ -103,6 +106,9 @@ impl Default for Config {
             carry_files: true,
             auto_connect: true,
             share_text: true,
+            share_metrics: false,
+            show_metrics: false,
+            metrics_mask: crate::metrics::ALL,
             id: random_id(),
             require_approval: true,
             trusted: Vec::new(),
@@ -281,6 +287,12 @@ impl Config {
                 "screen_max_w" => c.screen.max_w = v.parse().unwrap_or(1920),
                 "screen_monitor" => c.screen.monitor = v.parse().unwrap_or(0),
                 "screen_cursor" => c.screen.cursor = v != "0",
+                "share_metrics" => c.share_metrics = v == "1",
+                "show_metrics" => c.show_metrics = v == "1",
+                "metrics_mask" => {
+                    c.metrics_mask =
+                        v.parse::<u8>().unwrap_or(crate::metrics::ALL) & crate::metrics::ALL
+                }
                 "screen_extend" => {
                     c.screen.extend = v.split_once('x').and_then(|(w, h)| {
                         let size = (w.parse().ok()?, h.parse().ok()?);
@@ -388,6 +400,10 @@ impl Config {
             "allow_remote_prefs={}\n",
             self.allow_remote_prefs as u8
         ));
+        s.push_str(&format!(
+            "share_metrics={}\nshow_metrics={}\nmetrics_mask={}\n",
+            self.share_metrics as u8, self.show_metrics as u8, self.metrics_mask
+        ));
         if let Some((w, h)) = self.screen.extend {
             s.push_str(&format!("screen_extend={w}x{h}\n"));
         }
@@ -421,6 +437,15 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn performance_is_opt_in_and_categories_are_bounded() {
+        let mut c = Config::default();
+        assert!(!c.share_metrics && !c.show_metrics);
+        c.parse("share_metrics=1\nshow_metrics=1\nmetrics_mask=255\n");
+        assert!(c.share_metrics && c.show_metrics);
+        assert_eq!(c.metrics_mask, crate::metrics::ALL);
+    }
 
     #[test]
     fn virtual_display_preference_accepts_supported_sizes_only() {

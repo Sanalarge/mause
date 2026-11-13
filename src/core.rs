@@ -221,6 +221,10 @@ pub struct Shared {
     pub requests: Mutex<Vec<Request>>,
     pub learned: Mutex<Vec<(String, String)>>,
     pub share_text: AtomicBool,
+    pub metrics_share: AtomicBool,
+    pub metrics_show: AtomicBool,
+    pub metrics_local: Mutex<Option<crate::metrics::TimedSample>>,
+    pub metrics_peer: Mutex<HashMap<String, crate::metrics::TimedSample>>,
     pub last_text: Mutex<String>,
     pub last_carry: Mutex<Vec<std::path::PathBuf>>,
     pub peer_prefs: Mutex<Option<u16>>,
@@ -282,6 +286,10 @@ impl Shared {
             requests: Mutex::new(Vec::new()),
             learned: Mutex::new(Vec::new()),
             share_text: AtomicBool::new(true),
+            metrics_share: AtomicBool::new(false),
+            metrics_show: AtomicBool::new(false),
+            metrics_local: Mutex::default(),
+            metrics_peer: Mutex::default(),
             last_text: Mutex::new(String::new()),
             last_carry: Mutex::new(Vec::new()),
             peer_prefs: Mutex::new(None),
@@ -597,6 +605,9 @@ pub fn run(cfg: Config, sh: Arc<Shared>) {
     sh.latency.store(cfg.relay_latency, Ordering::Relaxed);
     sh.carry_files.store(cfg.carry_files, Ordering::Relaxed);
     sh.share_text.store(cfg.share_text, Ordering::Relaxed);
+    sh.metrics_share.store(cfg.share_metrics, Ordering::Relaxed);
+    sh.metrics_show.store(cfg.show_metrics, Ordering::Relaxed);
+    crate::metrics::start(Arc::downgrade(&sh));
     *sh.policy.lock().unwrap() = Policy::from_cfg(&cfg);
     *sh.perms.lock().unwrap() = Perms::from_cfg(&cfg);
     sh.remote_prefs
@@ -1110,6 +1121,7 @@ fn end_session(sh: &Shared, inj: &Mutex<Injector>, r: io::Result<()>, session: u
         gone
     };
     for l in &gone {
+        sh.metrics_peer.lock().unwrap().remove(&l.id);
         sh.devices.lock().unwrap().remove(&l.id);
         sh.peer_secrets.lock().unwrap().remove(&l.ip);
         let mut ip = sh.peer_ip.lock().unwrap();
@@ -1228,6 +1240,10 @@ fn hand_off(sh: &Shared, from: u64, to: u64, pos: u16, push: Option<Side>) -> bo
     tx.send(Msg::Takeover(to, pos, push)).is_ok()
 }
 
+fn updated_peer_flags(flags: u32, preferences: u16) -> u32 {
+    (flags & !0x1F) | (preferences as u32 & 0x1F) | flows::SUPPORTS_PREFS
+}
+
 fn not_for_us(f: &Frame, screen_mine: bool, usb_mine: bool) -> bool {
     match f {
         Frame::Usb(..) => !usb_mine,
@@ -1263,6 +1279,8 @@ fn run_session(
             | flows::SUPPORTS_USB
             | flows::SUPPORTS_VERSION
             | flows::SUPPORTS_HARDWARE
+            | flows::SUPPORTS_METRICS
+            | flows::SUPPORTS_USB2
     );
     let parse = parse_ident;
     let (eff, peer, mut pflags, pid, far_home, (pw, ph)) = if initiator {
@@ -1404,6 +1422,10 @@ fn run_session(
     let mut echo_warned = false;
     let mut screen_retry: Option<Instant> = None;
     let mut usb_client: Option<usb::Tunnel> = None;
+    let metrics_ok = pflags & flows::SUPPORTS_METRICS != 0;
+    let mut metrics_requested = false;
+    let mut metrics_subscribed = None;
+    let mut metrics_sent = Instant::now() - Duration::from_secs(2);
     let hit = |nx: i32, ny: i32| beyond(nx, ny, w, h) == Some(eff);
     let along = |x: i32, y: i32| edge_along(x, y, eff, w, h);
     let place = |pos: u16, inset: i32| edge_point(pos, eff, inset, w, h);
@@ -1460,7 +1482,12 @@ fn run_session(
             }
         }
         if usb_mine && usb_server.is_none() {
-            usb_server = usb::serve(peer_ip.clone(), secret.clone()).ok();
+            let port = if pflags & flows::SUPPORTS_USB2 != 0 {
+                usb::PORT
+            } else {
+                usb::LEGACY_PORT
+            };
+            usb_server = usb::serve(peer_ip.clone(), secret.clone(), port).ok();
             if usb_server.is_some() {
                 sh.usb_holder.store(session, Ordering::Relaxed);
             }
@@ -1507,6 +1534,27 @@ fn run_session(
             }
         }
         if last_ping.elapsed() >= Duration::from_secs(1) {
+            if metrics_ok {
+                let show = sh.metrics_show.load(Ordering::Relaxed);
+                if metrics_subscribed != Some(show) {
+                    write_frame(
+                        &mut s,
+                        &Frame::Device(hardware::METRICS_SUBSCRIBE, vec![show as u8]),
+                    )?;
+                    metrics_subscribed = Some(show);
+                    if !show {
+                        sh.metrics_peer.lock().unwrap().remove(&pid);
+                    }
+                }
+                if metrics_requested && metrics_sent.elapsed() >= Duration::from_secs(2) {
+                    let data = crate::metrics::payload(
+                        sh.metrics_share.load(Ordering::Relaxed),
+                        sh.metrics_local.lock().unwrap().as_ref(),
+                    );
+                    write_frame(&mut s, &Frame::Device(hardware::METRICS_SAMPLE, data))?;
+                    metrics_sent = Instant::now();
+                }
+            }
             write_frame(&mut s, &Frame::Ping)?;
             last_ping = Instant::now();
         }
@@ -1834,7 +1882,7 @@ fn run_session(
                     }
                     sh.update_link(session, |l| l.prefs = Some(bits));
                     let old = pflags;
-                    pflags = (bits as u32 & 0x1F) | flows::SUPPORTS_PREFS;
+                    pflags = updated_peer_flags(pflags, bits);
                     for i in 0..2 {
                         let (now, before) = (pflags & (2 << i) != 0, old & (2 << i) != 0);
                         if !now && before {
@@ -1846,6 +1894,29 @@ fn run_session(
                     }
                 }
                 Frame::Device(op, data) if hardware_ok => {
+                    if metrics_ok && op == hardware::METRICS_SUBSCRIBE {
+                        metrics_requested = data.as_slice() == [1];
+                        continue;
+                    }
+                    if metrics_ok && op == hardware::METRICS_SAMPLE {
+                        let mut peers = sh.metrics_peer.lock().unwrap();
+                        if sh.metrics_show.load(Ordering::Relaxed) {
+                            if let Some(sample) = crate::metrics::Sample::decode(&data) {
+                                peers.insert(
+                                    pid.clone(),
+                                    crate::metrics::TimedSample {
+                                        at: Instant::now(),
+                                        sample,
+                                    },
+                                );
+                            } else {
+                                peers.remove(&pid);
+                            }
+                        } else {
+                            peers.remove(&pid);
+                        }
+                        continue;
+                    }
                     let mut devices = sh.devices.lock().unwrap();
                     let entry = devices.entry(pid.clone()).or_default();
                     let text = String::from_utf8_lossy(&data).into_owned();
@@ -1936,6 +2007,11 @@ fn run_session(
                     session,
                     &peer_ip,
                     &secret,
+                    if pflags & flows::SUPPORTS_USB2 != 0 {
+                        usb::PORT
+                    } else {
+                        usb::LEGACY_PORT
+                    },
                     &mut usb_client,
                     &mut s,
                 )?,
@@ -2194,10 +2270,10 @@ fn handle_usb(
     session: u64,
     peer_ip: &str,
     secret: &str,
+    port: u16,
     client: &mut Option<usb::Tunnel>,
     s: &mut Secure,
 ) -> io::Result<()> {
-    let allowed = |sh: &Shared, d: &usb::Dev| sh.usb_allowed.lock().unwrap().contains(&d.id);
     match op {
         usb::LIST_REQ => {
             if !sh.perms.lock().unwrap().usb_out {
@@ -2205,40 +2281,70 @@ fn handle_usb(
                 write_frame(s, &Frame::Usb(usb::LIST, String::new()))?;
                 return Ok(());
             }
-            let devs = match usb::list_local() {
-                Ok(v) => v.into_iter().filter(|d| allowed(sh, d)).collect(),
-                Err(e) => {
-                    write_frame(s, &Frame::Usb(usb::FAIL, format!("\tKarşı PC: {e}")))?;
-                    Vec::new()
-                }
-            };
-            write_frame(s, &Frame::Usb(usb::LIST, usb::encode_list(&devs)))?;
+            let (shared, sender) = (sh.clone(), tx.clone());
+            thread::spawn(move || {
+                let allowed = shared.usb_allowed.lock().unwrap().clone();
+                let permitted = shared.perms.lock().unwrap().usb_out;
+                let devs = match usb::list_local() {
+                    Ok(v) => v
+                        .into_iter()
+                        .filter(|d| permitted && allowed.contains(&d.id))
+                        .collect(),
+                    Err(e) => {
+                        let _ = sender.send(Msg::UsbOut(
+                            session,
+                            usb::FAIL,
+                            format!("\tKarşı PC: {e}"),
+                        ));
+                        Vec::new()
+                    }
+                };
+                let _ = sender.send(Msg::UsbOut(session, usb::LIST, usb::encode_list(&devs)));
+            });
         }
         usb::LIST => *sh.usb_remote.lock().unwrap() = Some(usb::decode_list(&text)),
         usb::ATTACH => {
-            let dev = usb::list_local()
-                .ok()
-                .and_then(|v| v.into_iter().find(|d| d.busid == text));
-            let ok =
-                sh.perms.lock().unwrap().usb_out && dev.as_ref().is_some_and(|d| allowed(sh, d));
-            if !ok || !usb::valid_busid(&text) {
+            if !sh.perms.lock().unwrap().usb_out || !usb::valid_busid(&text) {
                 write_frame(
                     s,
                     &Frame::Usb(usb::FAIL, format!("{text}\tbu cihaz paylaşıma açık değil")),
                 )?;
                 return Ok(());
             }
-            let name = dev.map(|d| d.name).unwrap_or_default();
-            sh.log(format!(
-                "Karşı PC USB cihazınızı istiyor: {name}. USB erişim yardımcısı kullanılıyor."
-            ));
             let (sh, tx) = (sh.clone(), tx.clone());
             thread::spawn(move || {
+                let dev = usb::list_local()
+                    .ok()
+                    .and_then(|v| v.into_iter().find(|d| d.busid == text));
+                let permitted = sh.perms.lock().unwrap().usb_out;
+                if !permitted
+                    || !dev
+                        .as_ref()
+                        .is_some_and(|d| sh.usb_allowed.lock().unwrap().contains(&d.id))
+                {
+                    let _ = tx.send(Msg::UsbOut(
+                        session,
+                        usb::FAIL,
+                        format!("{text}\tbu cihaz paylaşıma açık değil veya çıkarılmış"),
+                    ));
+                    return;
+                }
+                let name = dev.map(|d| d.name).unwrap_or_default();
                 let (op, msg) = match usb::bind(&text) {
                     Ok(()) => {
+                        if !sh
+                            .links
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .any(|l| l.session == session)
+                        {
+                            let _ = usb::unbind(&text);
+                            return;
+                        }
                         sh.usb_exported.lock().unwrap().push(text.clone());
                         sh.log(format!(
-                            "USB cihazı karşıya verildi: {name} (bu PC'de artık kullanılamaz)."
+                            "USB cihazı paylaşım için hazır: {name}; karşı PC'nin takması bekleniyor."
                         ));
                         (usb::READY, text)
                     }
@@ -2252,7 +2358,20 @@ fn handle_usb(
         }
         usb::READY if usb::valid_busid(&text) => {
             if client.is_none() {
-                *client = Some(usb::connect(peer_ip.to_owned(), secret.to_owned())?);
+                match usb::connect(peer_ip.to_owned(), secret.to_owned(), port) {
+                    Ok(tunnel) => *client = Some(tunnel),
+                    Err(e) => {
+                        sh.usb_status
+                            .lock()
+                            .unwrap()
+                            .insert(text.clone(), format!("USB tüneli açılamadı: {e}"));
+                        sh.log(format!(
+                            "USB tüneli açılamadı: {e}; PC bağlantısı korunuyor."
+                        ));
+                        write_frame(s, &Frame::Usb(usb::DETACH, text))?;
+                        return Ok(());
+                    }
+                }
             }
             let local = client.as_ref().map(|c| c.local).unwrap();
             let dev = sh
@@ -2273,9 +2392,20 @@ fn handle_usb(
             let (sh, tx) = (sh.clone(), tx.clone());
             thread::spawn(move || match usb::attach(local, &text) {
                 Ok(()) => {
+                    if !sh
+                        .links
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|l| l.session == session)
+                    {
+                        let _ = usb::detach(&text);
+                        return;
+                    }
                     sh.usb_status.lock().unwrap().remove(&text);
                     sh.log(format!("USB cihazı bu bilgisayara takıldı: {}", dev.name));
                     sh.usb_attached.lock().unwrap().push(dev);
+                    let _ = tx.send(Msg::UsbOut(session, usb::ATTACHED, text));
                 }
                 Err(e) => {
                     sh.usb_status
@@ -2286,6 +2416,9 @@ fn handle_usb(
                     let _ = tx.send(Msg::UsbOut(session, usb::DETACH, text));
                 }
             });
+        }
+        usb::ATTACHED if sh.usb_exported.lock().unwrap().contains(&text) => {
+            sh.log(format!("USB cihazı karşı PC'ye takıldı: {text}."));
         }
         usb::FAIL => {
             let (busid, msg) = text.split_once('\t').unwrap_or(("", &text));
@@ -2326,6 +2459,52 @@ fn on_dev(evs: Vec<Ev>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changing_permissions_preserves_usb_and_metrics_capabilities() {
+        let flags = flows::SUPPORTS_USB2 | flows::SUPPORTS_METRICS | flows::SUPPORTS_SCREEN2 | 31;
+        let updated = updated_peer_flags(flags, 0);
+        assert_eq!(updated & 31, 0);
+        assert_ne!(updated & flows::SUPPORTS_USB2, 0);
+        assert_ne!(updated & flows::SUPPORTS_METRICS, 0);
+        assert_ne!(updated & flows::SUPPORTS_SCREEN2, 0);
+    }
+
+    #[test]
+    fn usb_tunnel_failure_does_not_close_the_control_channel() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let reader = thread::spawn(move || {
+            let (tcp, _) = listener.accept().unwrap();
+            let mut secure = net::handshake(tcp, false, "usb-control-test").unwrap();
+            assert!(
+                matches!(read_frame(&mut secure).unwrap(), Frame::Usb(usb::DETACH, b) if b == "2-1")
+            );
+            assert!(matches!(read_frame(&mut secure).unwrap(), Frame::Ping));
+        });
+        let mut secure =
+            net::handshake(TcpStream::connect(addr).unwrap(), true, "usb-control-test").unwrap();
+        let shared = Shared::new(false);
+        let (tx, _) = mpsc::channel();
+        let mut client = None;
+        handle_usb(
+            usb::READY,
+            "2-1".into(),
+            &shared,
+            &tx,
+            1,
+            "invalid-ip",
+            "usb-control-test",
+            usb::PORT,
+            &mut client,
+            &mut secure,
+        )
+        .unwrap();
+        assert!(client.is_none());
+        assert!(shared.usb_status.lock().unwrap()["2-1"].contains("tüneli"));
+        write_frame(&mut secure, &Frame::Ping).unwrap();
+        reader.join().unwrap();
+    }
 
     #[test]
     fn remote_preferences_never_enable_local_permissions() {
