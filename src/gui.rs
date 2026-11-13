@@ -98,6 +98,50 @@ enum Page {
     Log,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum SettingsPage {
+    General,
+    Connection,
+    Sharing,
+    About,
+}
+
+impl SettingsPage {
+    const ALL: [SettingsPage; 4] = [
+        SettingsPage::General,
+        SettingsPage::Connection,
+        SettingsPage::Sharing,
+        SettingsPage::About,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            SettingsPage::General => "Genel",
+            SettingsPage::Connection => "Bağlantı ve güvenlik",
+            SettingsPage::Sharing => "Paylaşım",
+            SettingsPage::About => "Hakkında",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            SettingsPage::General => "Uygulama ve bu bilgisayar",
+            SettingsPage::Connection => "Ağ, parola ve cihaz izinleri",
+            SettingsPage::Sharing => "Kontrol, ekran ve pano",
+            SettingsPage::About => "Sürüm ve geliştiriciler",
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            SettingsPage::General => Icon::Settings,
+            SettingsPage::Connection => Icon::Shield,
+            SettingsPage::Sharing => Icon::Share,
+            SettingsPage::About => Icon::Log,
+        }
+    }
+}
+
 impl Page {
     const ALL: [Page; 6] = [
         Page::Share,
@@ -210,6 +254,7 @@ enum PopupAction {
 
 struct App {
     page: Page,
+    settings_page: SettingsPage,
     logo: Option<egui::TextureHandle>,
     audio: AudioView,
     audio_at: Instant,
@@ -282,6 +327,7 @@ impl App {
                 Ok("log") => Page::Log,
                 _ => Page::Share,
             },
+            settings_page: SettingsPage::General,
             logo: None,
             local: Pane::default(),
             remote: Arc::default(),
@@ -2567,6 +2613,94 @@ fn divider(ui: &mut egui::Ui) {
     ui.add_space(6.0);
 }
 
+fn settings_nav_item(
+    ui: &mut egui::Ui,
+    page: SettingsPage,
+    selected: bool,
+    update_ready: bool,
+    compact: bool,
+) -> egui::Response {
+    let palette = Palette::of(ui);
+    let width = ui.available_width();
+    let height = if compact { 52.0 } else { 62.0 };
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, page.title()));
+    let fill = if selected {
+        palette.selected
+    } else if response.hovered() {
+        palette.hover
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, design::RADIUS_BUTTON, fill);
+    if selected {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(
+                rect.left_top() + Vec2::new(0.0, 10.0),
+                rect.left_bottom() + Vec2::new(3.0, -10.0),
+            ),
+            2.0,
+            palette.signal,
+        );
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(1.0),
+            design::RADIUS_BUTTON + 1,
+            Stroke::new(2.0, palette.signal),
+            StrokeKind::Outside,
+        );
+    }
+    let icon_center = if compact {
+        rect.center()
+    } else {
+        egui::pos2(rect.left() + 23.0, rect.center().y)
+    };
+    design::icon(
+        ui.painter(),
+        icon_center,
+        page.icon(),
+        if selected {
+            palette.signal
+        } else {
+            palette.ink2
+        },
+        18.0,
+    );
+    if !compact {
+        let text_x = rect.left() + 44.0;
+        ui.painter().text(
+            egui::pos2(text_x, rect.top() + 19.0),
+            Align2::LEFT_CENTER,
+            page.title(),
+            design::medium(13.0),
+            if selected { palette.ink } else { palette.ink2 },
+        );
+        ui.painter().text(
+            egui::pos2(text_x, rect.top() + 42.0),
+            Align2::LEFT_CENTER,
+            page.description(),
+            FontId::proportional(10.5),
+            palette.muted,
+        );
+    }
+    if update_ready && page == SettingsPage::About {
+        red_dot(
+            ui.painter(),
+            egui::pos2(rect.right() - 10.0, rect.top() + 12.0),
+            4.0,
+            palette,
+        );
+    }
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if compact {
+        response.on_hover_text(format!("{}\n{}", page.title(), page.description()))
+    } else {
+        response
+    }
+}
+
 fn empty_state(ui: &mut egui::Ui, icon: Icon, title: &str, description: &str) {
     section(ui, None, |ui| {
         ui.set_min_height(200.0);
@@ -2788,24 +2922,28 @@ impl eframe::App for App {
 
                         self.request_banners(ui);
 
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                egui::Frame::new()
-                                    .inner_margin(Margin {
-                                        right: 18,
-                                        bottom: 16,
-                                        ..Default::default()
-                                    })
-                                    .show(ui, |ui| match self.page {
-                                        Page::Share => self.page_share(ui, &state, running),
-                                        Page::Audio => self.page_audio(ui),
-                                        Page::Files => self.page_files(ui, &state, hovering),
-                                        Page::Usb => self.page_usb(ui, &state),
-                                        Page::Settings => self.page_settings(ui, &ctx),
-                                        Page::Log => self.page_log(ui),
-                                    });
-                            });
+                        if self.page == Page::Settings {
+                            self.page_settings(ui, &ctx);
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    egui::Frame::new()
+                                        .inner_margin(Margin {
+                                            right: 18,
+                                            bottom: 16,
+                                            ..Default::default()
+                                        })
+                                        .show(ui, |ui| match self.page {
+                                            Page::Share => self.page_share(ui, &state, running),
+                                            Page::Audio => self.page_audio(ui),
+                                            Page::Files => self.page_files(ui, &state, hovering),
+                                            Page::Usb => self.page_usb(ui, &state),
+                                            Page::Log => self.page_log(ui),
+                                            Page::Settings => unreachable!(),
+                                        });
+                                });
+                        }
                     });
             });
         if self.notes_open {
@@ -6231,7 +6369,77 @@ impl App {
     }
 
     fn page_settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if !self.cfg.active_peer.is_empty() {
+        let available = ui.available_size();
+        let height = available.y.max(360.0);
+        let compact = available.x < 860.0;
+        let nav_width = if compact { 54.0 } else { 190.0 };
+        let update_ready = matches!(*self.update.lock().unwrap(), Upd::Available(_));
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                Vec2::new(nav_width, height),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.set_width(nav_width);
+                    if compact {
+                        ui.add_space(2.0);
+                    } else {
+                        ui.label(
+                            RichText::new("Kategoriler")
+                                .font(design::medium(11.0))
+                                .color(Palette::of(ui).muted),
+                        );
+                        ui.add_space(8.0);
+                    }
+                    for page in SettingsPage::ALL {
+                        if settings_nav_item(
+                            ui,
+                            page,
+                            self.settings_page == page,
+                            update_ready,
+                            compact,
+                        )
+                        .clicked()
+                        {
+                            self.settings_page = page;
+                        }
+                        ui.add_space(4.0);
+                    }
+                },
+            );
+            ui.add(egui::Separator::default().vertical());
+            ui.add_space(16.0);
+            let page = self.settings_page;
+            ui.allocate_ui_with_layout(
+                Vec2::new(ui.available_width(), height),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.label(
+                        RichText::new(page.title())
+                            .font(design::semibold(18.0))
+                            .color(Palette::of(ui).ink),
+                    );
+                    ui.add_space(3.0);
+                    hint(ui, page.description());
+                    ui.add_space(14.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("settings_content")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            egui::Frame::new()
+                                .inner_margin(Margin {
+                                    right: 18,
+                                    bottom: 16,
+                                    ..Default::default()
+                                })
+                                .show(ui, |ui| self.settings_content(ui, ctx, page));
+                        });
+                },
+            );
+        });
+    }
+
+    fn settings_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, page: SettingsPage) {
+        if page == SettingsPage::Sharing && !self.cfg.active_peer.is_empty() {
             let name = self
                 .shared
                 .as_ref()
@@ -6245,41 +6453,42 @@ impl App {
                 ),
             );
         }
-        section(ui, Some("Genel"), |ui| {
-            let mut au = autostart_on();
-            if toggle_row(
-                ui,
-                "Bilgisayar açılınca Mause'u başlat",
-                Some(if AUTOSTART_OK {
-                    "Oturum açıldığında Mause arka planda çalışır."
-                } else {
-                    "Bu platformda henüz desteklenmiyor."
-                }),
-                &mut au,
-                AUTOSTART_OK,
-            )
-            .on_disabled_hover_text("Bu platformda henüz desteklenmiyor")
-            .changed()
-            {
-                autostart_set(au);
-            }
-            divider(ui);
-            let picked = setting_row(ui, "Tema", None, 240.0, |ui| {
-                design::segmented(
+        if page == SettingsPage::General {
+            section(ui, Some("Genel"), |ui| {
+                let mut au = autostart_on();
+                if toggle_row(
                     ui,
-                    "theme",
-                    &["Sistem", "Koyu", "Açık"],
-                    self.cfg.theme as usize,
+                    "Bilgisayar açılınca Mause'u başlat",
+                    Some(if AUTOSTART_OK {
+                        "Oturum açıldığında Mause arka planda çalışır."
+                    } else {
+                        "Bu platformda henüz desteklenmiyor."
+                    }),
+                    &mut au,
+                    AUTOSTART_OK,
                 )
-            });
-            if let Some(i) = picked {
-                self.cfg.theme = i as u8;
-                apply_style(ctx, self.cfg.theme);
-                self.cfg.save();
-            }
-            divider(ui);
-            let mut remote = self.cfg.allow_remote_prefs;
-            if toggle_row(
+                .on_disabled_hover_text("Bu platformda henüz desteklenmiyor")
+                .changed()
+                {
+                    autostart_set(au);
+                }
+                divider(ui);
+                let picked = setting_row(ui, "Tema", None, 240.0, |ui| {
+                    design::segmented(
+                        ui,
+                        "theme",
+                        &["Sistem", "Koyu", "Açık"],
+                        self.cfg.theme as usize,
+                    )
+                });
+                if let Some(i) = picked {
+                    self.cfg.theme = i as u8;
+                    apply_style(ctx, self.cfg.theme);
+                    self.cfg.save();
+                }
+                divider(ui);
+                let mut remote = self.cfg.allow_remote_prefs;
+                if toggle_row(
                 ui,
                 "Eşleşmiş cihazlar paylaşım ayarlarımı değiştirebilsin",
                 Some("Karşıda bir akış tuşuna basılınca bu bilgisayarda da aynı akış açılır ya da kapanır. Kapalıysa karşı taraf yalnız kapatabilir."),
@@ -6291,87 +6500,97 @@ impl App {
                 self.cfg.allow_remote_prefs = remote;
                 self.sync_perms();
             }
-        });
+            });
+        }
 
-        section(ui, Some("Ağ ve güvenlik"), |ui| {
-            let mut changed = false;
-            setting_row(
-                ui,
-                "Bu PC'nin adı",
-                Some("Diğer bilgisayarda bu adla görünür."),
-                220.0,
-                |ui| {
+        if page == SettingsPage::Connection {
+            section(ui, Some("Ağ ve güvenlik"), |ui| {
+                let mut changed = false;
+                setting_row(
+                    ui,
+                    "Bu PC'nin adı",
+                    Some("Diğer bilgisayarda bu adla görünür."),
+                    220.0,
+                    |ui| {
+                        changed |= ui
+                            .add(
+                                egui::TextEdit::singleline(&mut self.cfg.name)
+                                    .desired_width(200.0)
+                                    .min_size(Vec2::new(0.0, 34.0))
+                                    .align(Align2::LEFT_CENTER),
+                            )
+                            .lost_focus();
+                    },
+                );
+                divider(ui);
+                setting_row(ui, "Port", Some("İki PC'de aynı olmalı."), 100.0, |ui| {
                     changed |= ui
                         .add(
-                            egui::TextEdit::singleline(&mut self.cfg.name)
-                                .desired_width(200.0)
+                            egui::TextEdit::singleline(&mut self.cfg.port)
+                                .desired_width(80.0)
                                 .min_size(Vec2::new(0.0, 34.0))
                                 .align(Align2::LEFT_CENTER),
                         )
                         .lost_focus();
-                },
-            );
-            divider(ui);
-            setting_row(ui, "Port", Some("İki PC'de aynı olmalı."), 100.0, |ui| {
-                changed |= ui
-                    .add(
-                        egui::TextEdit::singleline(&mut self.cfg.port)
-                            .desired_width(80.0)
-                            .min_size(Vec2::new(0.0, 34.0))
-                            .align(Align2::LEFT_CENTER),
-                    )
-                    .lost_focus();
-            });
-            divider(ui);
-            setting_row(
-                ui,
-                "Ekran çözünürlüğü",
-                Some("Otomatik algılanır; gerekirse düzeltin."),
-                300.0,
-                |ui| {
-                    if design::key(ui, "Yeniden algıla", KeyKind::Plain, true, 0.0).clicked() {
-                        if let Some((w, h)) = crate::platform::detect_screen() {
-                            (self.cfg.w, self.cfg.h) = (w, h);
+                });
+                divider(ui);
+                setting_row(
+                    ui,
+                    "Ekran çözünürlüğü",
+                    Some("Otomatik algılanır; gerekirse düzeltin."),
+                    300.0,
+                    |ui| {
+                        if design::key(ui, "Yeniden algıla", KeyKind::Plain, true, 0.0).clicked() {
+                            if let Some((w, h)) = crate::platform::detect_screen() {
+                                (self.cfg.w, self.cfg.h) = (w, h);
+                            }
                         }
-                    }
-                    ui.add(egui::DragValue::new(&mut self.cfg.h).range(240..=16384));
-                    ui.label("×");
-                    ui.add(egui::DragValue::new(&mut self.cfg.w).range(320..=16384));
-                },
-            );
-            if changed {
-                self.restart();
-            }
-        });
-
-        self.secret_section(ui);
-        self.roles_section(ui);
-        self.screen_section(ui);
-        section(ui, Some("Performans göstergeleri"), |ui| {
-            let mut changed = toggle_row(ui, "Bu PC'nin performansını bağlı cihazlarla paylaş", Some("Yalnızca toplam kullanım değerleri paylaşılır. İşlem, dosya ve ağ adresi listeleri gönderilmez."), &mut self.cfg.share_metrics, true).changed();
-            changed |= toggle_row(ui, "Cihaz kartlarında performansı göster", Some("Değerler yaklaşık iki saniyede bir güncellenir. Karşı PC paylaşımı kapatabilir."), &mut self.cfg.show_metrics, true).changed();
-            ui.horizontal_wrapped(|ui| {
-                for (index, label) in ["İşlemci", "RAM", "GPU", "Disk", "Ağ"].iter().enumerate()
-                {
-                    let mut on = self.cfg.metrics_mask & (1 << index) != 0;
-                    if ui.checkbox(&mut on, *label).changed() {
-                        if on {
-                            self.cfg.metrics_mask |= 1 << index;
-                        } else {
-                            self.cfg.metrics_mask &= !(1 << index);
-                        }
-                        changed = true;
-                    }
+                        ui.add(egui::DragValue::new(&mut self.cfg.h).range(240..=16384));
+                        ui.label("×");
+                        ui.add(egui::DragValue::new(&mut self.cfg.w).range(320..=16384));
+                    },
+                );
+                if changed {
+                    self.restart();
                 }
             });
-            if changed {
-                self.sync_perms();
-            }
-        });
+        }
 
-        section(ui, Some("Bağlantı izinleri"), |ui| {
-            let mut req = self.cfg.require_approval;
-            if toggle_row(
+        if page == SettingsPage::Connection {
+            self.secret_section(ui);
+        }
+        if page == SettingsPage::Sharing {
+            self.roles_section(ui);
+            self.screen_section(ui);
+        }
+        if page == SettingsPage::General {
+            section(ui, Some("Performans göstergeleri"), |ui| {
+                let mut changed = toggle_row(ui, "Bu PC'nin performansını bağlı cihazlarla paylaş", Some("Yalnızca toplam kullanım değerleri paylaşılır. İşlem, dosya ve ağ adresi listeleri gönderilmez."), &mut self.cfg.share_metrics, true).changed();
+                changed |= toggle_row(ui, "Cihaz kartlarında performansı göster", Some("Değerler yaklaşık iki saniyede bir güncellenir. Karşı PC paylaşımı kapatabilir."), &mut self.cfg.show_metrics, true).changed();
+                ui.horizontal_wrapped(|ui| {
+                    for (index, label) in ["İşlemci", "RAM", "GPU", "Disk", "Ağ"].iter().enumerate()
+                    {
+                        let mut on = self.cfg.metrics_mask & (1 << index) != 0;
+                        if ui.checkbox(&mut on, *label).changed() {
+                            if on {
+                                self.cfg.metrics_mask |= 1 << index;
+                            } else {
+                                self.cfg.metrics_mask &= !(1 << index);
+                            }
+                            changed = true;
+                        }
+                    }
+                });
+                if changed {
+                    self.sync_perms();
+                }
+            });
+        }
+
+        if page == SettingsPage::Connection {
+            section(ui, Some("Bağlantı izinleri"), |ui| {
+                let mut req = self.cfg.require_approval;
+                if toggle_row(
                 ui,
                 "Yeni cihazlar için onay iste",
                 Some("Kapalıyken parolayı bilen herkes onaysız bağlanır. Engellenen cihazlarla hiçbir zaman bağlantı kurulmaz."),
@@ -6383,170 +6602,175 @@ impl App {
                 self.cfg.require_approval = req;
                 self.sync_policy();
             }
-            divider(ui);
-            ui.add_space(4.0);
-            ui.label(design::strong("Güvenilen cihazlar", BODY));
-            if self.cfg.trusted.is_empty() {
-                hint(ui, "Henüz yok. Bağlandığınız cihazlar buraya eklenir.");
-            }
-            let mut remove: Option<usize> = None;
-            let mut block: Option<usize> = None;
-            for (n, (_, name)) in self.cfg.trusted.iter().enumerate() {
-                let title = if name.is_empty() {
-                    "Adsız cihaz"
-                } else {
-                    name
-                };
-                setting_row(ui, title, None, 200.0, |ui| {
-                    if design::key(ui, "Engelle", KeyKind::Danger, true, 0.0).clicked() {
-                        block = Some(n);
-                    }
-                    if design::key(ui, "Kaldır", KeyKind::Plain, true, 0.0).clicked() {
-                        remove = Some(n);
-                    }
-                });
-            }
-            if let Some(n) = remove {
-                self.cfg.trusted.remove(n);
-                self.sync_policy();
-            } else if let Some(n) = block {
-                let e = self.cfg.trusted.remove(n);
-                self.cfg.blocked.push(e);
-                self.sync_policy();
-            }
-            divider(ui);
-            ui.add_space(4.0);
-            ui.label(design::strong("Engellenen cihazlar", BODY));
-            if self.cfg.blocked.is_empty() {
-                hint(ui, "Engellenen cihaz yok.");
-            }
-            let mut unblock: Option<usize> = None;
-            for (n, (_, name)) in self.cfg.blocked.iter().enumerate() {
-                let title = if name.is_empty() {
-                    "Adsız cihaz"
-                } else {
-                    name
-                };
-                setting_row(ui, title, None, 150.0, |ui| {
-                    if design::key(ui, "Engeli kaldır", KeyKind::Plain, true, 0.0).clicked() {
-                        unblock = Some(n);
-                    }
-                });
-            }
-            if let Some(n) = unblock {
-                self.cfg.blocked.remove(n);
-                self.sync_policy();
-            }
-        });
-
-        section(ui, Some("Pano ile paylaşım"), |ui| {
-            let supported = crate::clip::AVAILABLE;
-            let unsupported = "Pano ile paylaşım bu platformda desteklenmiyor.";
-            let copy = if cfg!(target_os = "macos") {
-                "Cmd+C"
-            } else {
-                "Ctrl+C"
-            };
-            let carry_hint = format!(
-                "Dosyayı seçip {copy} yapın, mouse'u diğer PC'ye götürün; dosya orada İndirilenler/Mause'ye iner ve panoya konur."
-            );
-            let mut carry = self.cfg.carry_files;
-            if toggle_row(
-                ui,
-                "Kopyalanan dosya ve klasörleri ekran geçişinde taşı",
-                Some(if supported {
-                    carry_hint.as_str()
-                } else {
-                    unsupported
-                }),
-                &mut carry,
-                supported,
-            )
-            .on_disabled_hover_text(unsupported)
-            .changed()
-            {
-                self.cfg.carry_files = carry;
-                if let Some(s) = &self.shared {
-                    s.carry_files.store(carry, Ordering::Relaxed);
+                divider(ui);
+                ui.add_space(4.0);
+                ui.label(design::strong("Güvenilen cihazlar", BODY));
+                if self.cfg.trusted.is_empty() {
+                    hint(ui, "Henüz yok. Bağlandığınız cihazlar buraya eklenir.");
                 }
-                self.cfg.save();
-            }
-            divider(ui);
-            let mut st = self.cfg.share_text;
-            if toggle_row(
-                ui,
-                "Kopyalanan metni de taşı",
-                Some("Mouse karşıya geçince panodaki metin de karşıya gider."),
-                &mut st,
-                supported,
-            )
-            .on_disabled_hover_text(unsupported)
-            .changed()
-            {
-                self.set_pref(Pref::ShareText, st);
-            }
-            divider(ui);
-            let inbox = transfer::inbox();
-            if setting_row(
-                ui,
-                "Alınanlar klasörü",
-                Some(&inbox.display().to_string()),
-                140.0,
-                |ui| design::key(ui, "Klasörü aç", KeyKind::Plain, true, 0.0).clicked(),
-            ) {
-                let _ = std::fs::create_dir_all(&inbox);
-                crate::platform::open_path(&inbox);
-            }
-        });
-
-        section(ui, Some("Güncelleme"), |ui| {
-            let upd = self.update.lock().unwrap().clone();
-            let status = match &upd {
-                Upd::Unknown => "Henüz denetlenmedi.".to_owned(),
-                Upd::Checking => "Denetleniyor…".to_owned(),
-                Upd::Latest => "Mause güncel.".to_owned(),
-                Upd::Available(r) => format!("Yeni sürüm hazır: {}", r.version),
-                Upd::Installing => "Güncelleniyor…".to_owned(),
-                Upd::Failed(e) => e.clone(),
-            };
-            let busy = matches!(upd, Upd::Checking | Upd::Installing);
-            let title = format!("Bu bilgisayarda Mause {}", update::VERSION);
-            let mut install = None;
-            let check = setting_row(ui, &title, Some(&status), 300.0, |ui| {
-                if let Upd::Available(r) = &upd {
-                    let key = design::key(ui, "Güncelle", KeyKind::Primary, true, 0.0);
-                    red_dot(
-                        ui.painter(),
-                        key.rect.right_top() + Vec2::new(-3.0, 3.0),
-                        4.5,
-                        Palette::of(ui),
-                    );
-                    if key.clicked() {
-                        install = Some(r.clone());
-                    }
+                let mut remove: Option<usize> = None;
+                let mut block: Option<usize> = None;
+                for (n, (_, name)) in self.cfg.trusted.iter().enumerate() {
+                    let title = if name.is_empty() {
+                        "Adsız cihaz"
+                    } else {
+                        name
+                    };
+                    setting_row(ui, title, None, 200.0, |ui| {
+                        if design::key(ui, "Engelle", KeyKind::Danger, true, 0.0).clicked() {
+                            block = Some(n);
+                        }
+                        if design::key(ui, "Kaldır", KeyKind::Plain, true, 0.0).clicked() {
+                            remove = Some(n);
+                        }
+                    });
                 }
-                design::key(ui, "Güncellemeleri denetle", KeyKind::Plain, !busy, 0.0).clicked()
+                if let Some(n) = remove {
+                    self.cfg.trusted.remove(n);
+                    self.sync_policy();
+                } else if let Some(n) = block {
+                    let e = self.cfg.trusted.remove(n);
+                    self.cfg.blocked.push(e);
+                    self.sync_policy();
+                }
+                divider(ui);
+                ui.add_space(4.0);
+                ui.label(design::strong("Engellenen cihazlar", BODY));
+                if self.cfg.blocked.is_empty() {
+                    hint(ui, "Engellenen cihaz yok.");
+                }
+                let mut unblock: Option<usize> = None;
+                for (n, (_, name)) in self.cfg.blocked.iter().enumerate() {
+                    let title = if name.is_empty() {
+                        "Adsız cihaz"
+                    } else {
+                        name
+                    };
+                    setting_row(ui, title, None, 150.0, |ui| {
+                        if design::key(ui, "Engeli kaldır", KeyKind::Plain, true, 0.0).clicked() {
+                            unblock = Some(n);
+                        }
+                    });
+                }
+                if let Some(n) = unblock {
+                    self.cfg.blocked.remove(n);
+                    self.sync_policy();
+                }
             });
-            if let Some(r) = install {
-                self.install_update(r);
-            } else if check {
-                self.check_update();
-            }
-        });
+        }
 
-        section(ui, Some("Hakkında"), |ui| {
-            let names = DEVELOPERS.map(|d| d.name).join(" ve ");
-            let about = format!("Geliştirenler: {names}");
-            if setting_row(
-                ui,
-                &format!("Mause {}", env!("CARGO_PKG_VERSION")),
-                Some(&about),
-                180.0,
-                |ui| design::key(ui, "Geliştirenler", KeyKind::Plain, true, 0.0).clicked(),
-            ) {
-                self.devs_modal = true;
-            }
-        });
+        if page == SettingsPage::Sharing {
+            section(ui, Some("Pano ile paylaşım"), |ui| {
+                let supported = crate::clip::AVAILABLE;
+                let unsupported = "Pano ile paylaşım bu platformda desteklenmiyor.";
+                let copy = if cfg!(target_os = "macos") {
+                    "Cmd+C"
+                } else {
+                    "Ctrl+C"
+                };
+                let carry_hint = format!(
+                    "Dosyayı seçip {copy} yapın, mouse'u diğer PC'ye götürün; dosya orada İndirilenler/Mause'ye iner ve panoya konur."
+                );
+                let mut carry = self.cfg.carry_files;
+                if toggle_row(
+                    ui,
+                    "Kopyalanan dosya ve klasörleri ekran geçişinde taşı",
+                    Some(if supported {
+                        carry_hint.as_str()
+                    } else {
+                        unsupported
+                    }),
+                    &mut carry,
+                    supported,
+                )
+                .on_disabled_hover_text(unsupported)
+                .changed()
+                {
+                    self.cfg.carry_files = carry;
+                    if let Some(s) = &self.shared {
+                        s.carry_files.store(carry, Ordering::Relaxed);
+                    }
+                    self.cfg.save();
+                }
+                divider(ui);
+                let mut st = self.cfg.share_text;
+                if toggle_row(
+                    ui,
+                    "Kopyalanan metni de taşı",
+                    Some("Mouse karşıya geçince panodaki metin de karşıya gider."),
+                    &mut st,
+                    supported,
+                )
+                .on_disabled_hover_text(unsupported)
+                .changed()
+                {
+                    self.set_pref(Pref::ShareText, st);
+                }
+                divider(ui);
+                let inbox = transfer::inbox();
+                if setting_row(
+                    ui,
+                    "Alınanlar klasörü",
+                    Some(&inbox.display().to_string()),
+                    140.0,
+                    |ui| design::key(ui, "Klasörü aç", KeyKind::Plain, true, 0.0).clicked(),
+                ) {
+                    let _ = std::fs::create_dir_all(&inbox);
+                    crate::platform::open_path(&inbox);
+                }
+            });
+        }
+
+        if page == SettingsPage::About {
+            section(ui, Some("Güncelleme"), |ui| {
+                let upd = self.update.lock().unwrap().clone();
+                let status = match &upd {
+                    Upd::Unknown => "Henüz denetlenmedi.".to_owned(),
+                    Upd::Checking => "Denetleniyor…".to_owned(),
+                    Upd::Latest => "Mause güncel.".to_owned(),
+                    Upd::Available(r) => format!("Yeni sürüm hazır: {}", r.version),
+                    Upd::Installing => "Güncelleniyor…".to_owned(),
+                    Upd::Failed(e) => e.clone(),
+                };
+                let busy = matches!(upd, Upd::Checking | Upd::Installing);
+                let title = format!("Bu bilgisayarda Mause {}", update::VERSION);
+                let mut install = None;
+                let check = setting_row(ui, &title, Some(&status), 300.0, |ui| {
+                    if let Upd::Available(r) = &upd {
+                        let key = design::key(ui, "Güncelle", KeyKind::Primary, true, 0.0);
+                        red_dot(
+                            ui.painter(),
+                            key.rect.right_top() + Vec2::new(-3.0, 3.0),
+                            4.5,
+                            Palette::of(ui),
+                        );
+                        if key.clicked() {
+                            install = Some(r.clone());
+                        }
+                    }
+                    design::key(ui, "Güncellemeleri denetle", KeyKind::Plain, !busy, 0.0).clicked()
+                });
+                if let Some(r) = install {
+                    self.install_update(r);
+                } else if check {
+                    self.check_update();
+                }
+            });
+
+            section(ui, Some("Hakkında"), |ui| {
+                let names = DEVELOPERS.map(|d| d.name).join(" ve ");
+                let about = format!("Geliştirenler: {names}");
+                if setting_row(
+                    ui,
+                    &format!("Mause {}", env!("CARGO_PKG_VERSION")),
+                    Some(&about),
+                    180.0,
+                    |ui| design::key(ui, "Geliştirenler", KeyKind::Plain, true, 0.0).clicked(),
+                ) {
+                    self.devs_modal = true;
+                }
+            });
+        }
     }
 
     fn share_computers(&mut self, ui: &mut egui::Ui, state: &State, running: bool) {
@@ -7216,6 +7440,7 @@ const AUTOSTART_OK: bool = cfg!(any(
 fn ui_fixture(page: Page, theme: u8) -> App {
     App {
         page,
+        settings_page: SettingsPage::General,
         logo: None,
         local: Pane::default(),
         remote: Arc::default(),
@@ -7605,6 +7830,37 @@ mod layout_tests {
                         ui.min_rect().width() <= width + 1.0,
                         "{} exceeds the minimum content width: {}",
                         page.title(),
+                        ui.min_rect().width()
+                    );
+                });
+                output.textures_delta.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn settings_categories_fit_the_minimum_window_in_both_themes() {
+        for theme in [1, 2] {
+            for settings_page in SettingsPage::ALL {
+                let ctx = egui::Context::default();
+                apply_style(&ctx, theme);
+                let mut app = fixture(Page::Settings, theme);
+                app.settings_page = settings_page;
+                let width = 732.0;
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(width, 760.0),
+                    )),
+                    ..Default::default()
+                };
+                let mut output = ctx.run_ui(input, |ui| {
+                    ui.set_max_width(width);
+                    app.page_settings(ui, &ctx);
+                    assert!(
+                        ui.min_rect().width() <= width + 1.0,
+                        "{} exceeds the minimum content width: {}",
+                        settings_page.title(),
                         ui.min_rect().width()
                     );
                 });
