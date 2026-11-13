@@ -291,6 +291,8 @@ struct App {
     usb_tools: Arc<Mutex<Option<String>>>,
     update_at: Option<Instant>,
     install_on_launch: bool,
+    extend_asked: Option<String>,
+    screen_go_fullscreen: bool,
 }
 
 impl App {
@@ -377,6 +379,8 @@ impl App {
             usb_tools: Arc::default(),
             update_at: None,
             install_on_launch: update::installs_on_launch(),
+            extend_asked: None,
+            screen_go_fullscreen: false,
         };
         app.restart_pending = true;
         app.start_pending_kvm();
@@ -2879,6 +2883,7 @@ impl eframe::App for App {
             self.check_update();
         }
         self.install_launch_update();
+        self.absorb_extend_invite();
         self.absorb_learned();
         self.absorb_remote_prefs();
         self.absorb_connected_peer();
@@ -3180,6 +3185,64 @@ fn terminal_line(palette: Palette, entry: &core::LogEntry) -> egui::text::Layout
     job.append(log_tag(tone), 16.0, format(tag_color));
     job.append(&entry.text, 16.0, format(text_color));
     job
+}
+
+#[derive(Clone, Copy)]
+enum AuxMonitor {
+    Off,
+    PeerShowsMine,
+    IShowPeers,
+}
+
+fn aux_choice(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    text: &str,
+    selected: bool,
+    enabled: bool,
+) -> egui::Response {
+    let palette = Palette::of(ui);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), design::medium(13.0), palette.ink);
+    let size = Vec2::new(galley.size().x + 48.0, 38.0);
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::RadioButton, enabled, selected, text)
+    });
+    let hot = enabled && response.hovered();
+    let (fill, border, ink) = match (enabled, selected) {
+        (false, _) => (Color32::TRANSPARENT, palette.rule, palette.muted),
+        (true, true) => (palette.accent, palette.accent, design::ON_ACCENT),
+        (true, false) if hot => (palette.hover, palette.field, palette.ink),
+        (true, false) => (palette.inset, palette.rule_strong, palette.ink2),
+    };
+    let painter = ui.painter();
+    painter.rect(rect, 10, fill, Stroke::new(1.0, border), StrokeKind::Inside);
+    design::icon(
+        painter,
+        egui::pos2(rect.left() + 20.0, rect.center().y),
+        icon,
+        ink,
+        16.0,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 36.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        text,
+        design::medium(13.0),
+        ink,
+    );
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    }
 }
 
 const PERFORMANCE_ICONS: [Icon; 5] = [
@@ -3776,6 +3839,7 @@ impl App {
                         }
                     });
                 });
+                self.aux_monitor_bar(ui);
                 ui.add_space(12.0);
                 self.kvm_layout(ui, state, running);
             },
@@ -5080,6 +5144,157 @@ impl App {
         r.clicked().then_some(!watching)
     }
 
+    fn absorb_extend_invite(&mut self) {
+        let Some(sh) = self.shared.clone() else {
+            return;
+        };
+        let Some((id, on)) = sh.extend_invite.lock().unwrap().take() else {
+            return;
+        };
+        if on {
+            self.extend_asked = None;
+            self.start_extended_watch(&id);
+        } else if self.watching() && sh.serves(core::Feat::Screen, &id) {
+            self.stop_extended_watch();
+        }
+    }
+
+    fn start_extended_watch(&mut self, id: &str) {
+        let size = screen::extend_size_for(self.cfg.w.max(0) as u32, self.cfg.h.max(0) as u32);
+        self.cfg.screen.extend = Some(size);
+        if let Some(sh) = &self.shared {
+            *sh.screen_opts.lock().unwrap() = self.cfg.screen;
+            sh.set_target(core::Feat::Screen, id);
+        }
+        self.cfg.save();
+        self.set_watching(true);
+        self.screen_go_fullscreen = true;
+    }
+
+    fn stop_extended_watch(&mut self) {
+        self.set_watching(false);
+        self.cfg.screen.extend = None;
+        if let Some(sh) = &self.shared {
+            *sh.screen_opts.lock().unwrap() = self.cfg.screen;
+        }
+        self.cfg.save();
+    }
+
+    fn ask_peer_to_extend(&mut self, id: &str, on: bool) {
+        if let Some(sh) = &self.shared {
+            sh.extend_requests.lock().unwrap().push((id.to_owned(), on));
+        }
+        self.extend_asked = on.then(|| id.to_owned());
+        if on {
+            self.set_device_pref(id, flows::SCREEN_OUT, true);
+        }
+    }
+
+    fn aux_monitor_bar(&mut self, ui: &mut egui::Ui) {
+        let Some(sh) = self.shared.clone() else {
+            return;
+        };
+        let links: Vec<core::Link> = sh
+            .links
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|link| !link.id.is_empty())
+            .cloned()
+            .collect();
+        if self
+            .extend_asked
+            .as_ref()
+            .is_some_and(|id| !links.iter().any(|link| &link.id == id))
+        {
+            self.extend_asked = None;
+        }
+        if links.is_empty() {
+            return;
+        }
+        let palette = Palette::of(ui);
+        ui.label(design::strong("Yardımcı monitör", LEAD));
+        ui.label(
+            RichText::new("Bir bilgisayarın ekranını diğerinin ek monitörü yapın. Masaüstü genişleyen bilgisayar Windows (sanal ekran sürücüsüyle), macOS ya da Linux Wayland olabilir.")
+                .size(13.0)
+                .color(palette.muted),
+        );
+        ui.add_space(8.0);
+        for link in &links {
+            let viewer = self.watching()
+                && self.cfg.screen.extend.is_some()
+                && sh.serves(core::Feat::Screen, &link.id);
+            let host = self.extend_asked.as_deref() == Some(link.id.as_str());
+            let host_allowed = screen::can_extend_here();
+            let mut choice = None;
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                ui.label(RichText::new(&link.name).font(design::medium(13.5)).color(palette.ink));
+                ui.add_space(6.0);
+                if aux_choice(ui, Icon::Off, "Kapalı", !viewer && !host, true)
+                    .on_hover_text("Yardımcı monitör kullanılmıyor.")
+                    .clicked()
+                {
+                    choice = Some(AuxMonitor::Off);
+                }
+                let host_tip = if host_allowed {
+                    format!(
+                        "Bu bilgisayarın masaüstü {} ekranına genişler; {} bu bilgisayarın ek monitörü olur.",
+                        link.name, link.name
+                    )
+                } else {
+                    "Bu macOS sürümü sanal ekranı desteklemiyor. Diğer seçeneği kullanın.".to_owned()
+                };
+                let host_label = format!("{} ek monitörüm olsun", link.name);
+                let host_response = aux_choice(ui, Icon::Upload, &host_label, host, host_allowed);
+                let host_response = if host_allowed {
+                    host_response.on_hover_text(host_tip)
+                } else {
+                    host_response.on_disabled_hover_text(host_tip)
+                };
+                if host_response.clicked() {
+                    choice = Some(AuxMonitor::PeerShowsMine);
+                }
+                let viewer_label = format!("Bu bilgisayar {} için ek monitör olsun", link.name);
+                if aux_choice(ui, Icon::Download, &viewer_label, viewer, true)
+                    .on_hover_text(format!(
+                        "{} masaüstü bu bilgisayara genişler ve tam ekran açılır.",
+                        link.name
+                    ))
+                    .clicked()
+                {
+                    choice = Some(AuxMonitor::IShowPeers);
+                }
+            });
+            match choice {
+                Some(AuxMonitor::Off) => {
+                    if host {
+                        self.ask_peer_to_extend(&link.id, false);
+                    }
+                    if viewer {
+                        self.stop_extended_watch();
+                    }
+                }
+                Some(AuxMonitor::PeerShowsMine) if !host => {
+                    if viewer {
+                        self.stop_extended_watch();
+                    }
+                    self.ask_peer_to_extend(&link.id, true);
+                }
+                Some(AuxMonitor::IShowPeers) if !viewer => {
+                    if host {
+                        self.ask_peer_to_extend(&link.id, false);
+                    }
+                    self.start_extended_watch(&link.id);
+                }
+                _ => {}
+            }
+        }
+        ui.add_space(4.0);
+        design::rule(ui);
+        ui.add_space(12.0);
+    }
+
     fn set_watching(&mut self, on: bool) {
         if let Some(sh) = &self.shared {
             sh.screen_want.store(on, Ordering::Relaxed);
@@ -5185,6 +5400,10 @@ impl App {
             builder,
             |ui, _class| {
                 close = ui.ctx().input(|i| i.viewport().close_requested());
+                if std::mem::take(&mut self.screen_go_fullscreen) {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+                }
                 ui.ctx().request_repaint_after(Duration::from_millis(30));
                 let palette = Palette::of(ui);
                 let (may_control, monitors) = sh.screen_peer.lock().unwrap().clone();
@@ -7661,6 +7880,8 @@ fn ui_fixture(page: Page, theme: u8) -> App {
         usb_tools: Arc::default(),
         update_at: None,
         install_on_launch: false,
+        extend_asked: None,
+        screen_go_fullscreen: false,
     }
 }
 

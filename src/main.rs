@@ -43,6 +43,9 @@ mod usb;
 mod vcam;
 #[cfg(target_os = "windows")]
 mod vdisplay;
+#[cfg(target_os = "macos")]
+#[path = "vdisplay_macos.rs"]
+mod vdisplay;
 mod video;
 
 use config::{Config, Side};

@@ -587,7 +587,7 @@ pub fn screen_capture_begin() -> bool {
 }
 
 pub fn screen_capture_begin_virtual(_: (u16, u16)) -> bool {
-    false
+    crate::vdisplay::supported() && screen_capture_begin()
 }
 
 pub fn screen_capture_error() -> Option<String> {
@@ -623,6 +623,10 @@ fn displays() -> Vec<CGDisplay> {
         ids.push(main);
     }
     ids.into_iter().map(CGDisplay::new).collect()
+}
+
+pub fn display_index(id: u32) -> Option<usize> {
+    displays().iter().position(|display| display.id == id)
 }
 
 pub fn monitors() -> Vec<super::Monitor> {

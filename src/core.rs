@@ -280,6 +280,8 @@ pub struct Shared {
     pub remote_prefs: AtomicBool,
     pub devices: Mutex<HashMap<String, DeviceInfo>>,
     pub device_cmds: Mutex<Vec<(String, u8, Vec<u8>)>>,
+    pub extend_requests: Mutex<Vec<(String, bool)>>,
+    pub extend_invite: Mutex<Option<(String, bool)>>,
     pub device_perms: Mutex<HashMap<String, u16>>,
     targets: Mutex<[String; 5]>,
     usb_holder: AtomicU64,
@@ -346,6 +348,8 @@ impl Shared {
             remote_prefs: AtomicBool::new(true),
             devices: Mutex::default(),
             device_cmds: Mutex::default(),
+            extend_requests: Mutex::default(),
+            extend_invite: Mutex::default(),
             device_perms: Mutex::default(),
             targets: Mutex::default(),
             usb_holder: AtomicU64::new(0),
@@ -1341,10 +1345,20 @@ fn updated_peer_flags(flags: u32, preferences: u16) -> u32 {
     (flags & !0x1F) | (preferences as u32 & 0x1F) | flows::SUPPORTS_PREFS
 }
 
+fn take_extend_requests(sh: &Shared, pid: &str) -> Vec<bool> {
+    let mut queue = sh.extend_requests.lock().unwrap();
+    let (mine, rest): (Vec<_>, Vec<_>) = queue.drain(..).partition(|(id, _)| id == pid);
+    *queue = rest;
+    mine.into_iter().map(|(_, on)| on).collect()
+}
+
 fn not_for_us(f: &Frame, screen_mine: bool, usb_mine: bool) -> bool {
     match f {
         Frame::Usb(..) => !usb_mine,
-        Frame::ScreenInfo(..) | Frame::Screen(screen::DENIED | screen::FAILED) => !screen_mine,
+        Frame::ScreenInfo(..)
+        | Frame::Screen(screen::DENIED | screen::FAILED | screen::EXTEND_UNSUPPORTED) => {
+            !screen_mine
+        }
         _ => false,
     }
 }
@@ -1661,6 +1675,20 @@ fn run_session(
             }
         } else {
             mine_out(sh);
+        }
+        for on in take_extend_requests(sh, &pid) {
+            if screen2_ok {
+                write_frame(
+                    &mut s,
+                    &Frame::Screen(if on {
+                        screen::EXTEND_ME
+                    } else {
+                        screen::EXTEND_STOP
+                    }),
+                )?;
+            } else {
+                sh.log("Karşı PC'deki Mause sürümü yardımcı monitör isteğini desteklemiyor; onu da güncelleyin.");
+            }
         }
         if hardware_ok {
             let mine: Vec<(u8, Vec<u8>)> = {
@@ -2085,6 +2113,13 @@ fn run_session(
                     write_frame(&mut s, &Frame::Screen(screen::DENIED))?;
                     sh.log("Karşı PC ekranınızı izlemek istedi ama ayarlarda kapalı; reddedildi.");
                 }
+                Frame::ScreenOpts(b)
+                    if screen::Opts::decode(&b).is_some_and(|o| o.extend.is_some())
+                        && !screen::can_extend_here() =>
+                {
+                    write_frame(&mut s, &Frame::Screen(screen::EXTEND_UNSUPPORTED))?;
+                    sh.log("Karşı PC bu bilgisayarın masaüstünü genişletmek istedi; bu macOS sürümü sanal ekranı desteklemiyor.");
+                }
                 Frame::ScreenOpts(b) => {
                     let o = screen::Opts::decode(&b).unwrap_or_default();
                     screen_tx = screen::start_sender(&peer_ip, secret.clone(), o);
@@ -2167,6 +2202,18 @@ fn run_session(
                 Frame::Screen(screen::DENIED) => {
                     _screen_rx = None;
                     sh.screen_note("Karşı PC ekran paylaşımına izin vermiyor. Karşıda Paylaşım → Bu bilgisayardan karşıya → Ekran açılmalı.");
+                }
+                Frame::Screen(screen::EXTEND_ME) => {
+                    *sh.extend_invite.lock().unwrap() = Some((pid.clone(), true));
+                    sh.log("Karşı PC bu bilgisayarı yardımcı monitör olarak kullanıyor.");
+                }
+                Frame::Screen(screen::EXTEND_STOP) => {
+                    *sh.extend_invite.lock().unwrap() = Some((pid.clone(), false));
+                    sh.log("Karşı PC yardımcı monitör kullanımını bitirdi.");
+                }
+                Frame::Screen(screen::EXTEND_UNSUPPORTED) => {
+                    _screen_rx = None;
+                    sh.screen_note("Karşı PC'nin macOS sürümü sanal ekranı desteklemiyor. Ters yönü deneyin: karşı PC'yi bu bilgisayarın yardımcı monitörü yapın.");
                 }
                 Frame::Screen(screen::FAILED) => {
                     _screen_rx = None;

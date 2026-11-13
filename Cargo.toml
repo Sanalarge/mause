@@ -58,7 +58,7 @@ core-foundation = "0.10"
 dispatch2 = "0.3.1"
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSColor", "NSGraphics", "NSScreen", "NSWindow", "NSResponder", "objc2-core-foundation"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSGeometry"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSString"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { version = "3.7.0", default-features = false }
