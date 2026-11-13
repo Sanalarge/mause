@@ -5,12 +5,12 @@ use eframe::egui::{
 
 pub const ON_ACCENT: Color32 = Color32::from_rgb(0x12, 0x12, 0x14);
 pub const MAX_CONTENT: f32 = 1040.0;
-pub const BODY: f32 = 14.0;
-pub const SMALL: f32 = 13.0;
-pub const META: f32 = 12.0;
-pub const LEAD: f32 = 16.0;
-pub const TITLE: f32 = 20.0;
-pub const CONTROL: f32 = 36.0;
+pub const BODY: f32 = 15.0;
+pub const SMALL: f32 = 14.0;
+pub const META: f32 = 13.0;
+pub const LEAD: f32 = 17.0;
+pub const TITLE: f32 = 22.0;
+pub const CONTROL: f32 = 38.0;
 pub const RADIUS: u8 = 8;
 pub const RADIUS_BUTTON: u8 = 12;
 pub const RADIUS_PANEL: u8 = 20;
@@ -48,27 +48,27 @@ impl Palette {
         let orange_edge = Color32::from_rgb(0xe0, 0x7f, 0x00);
         let lime = Color32::from_rgb(0xc6, 0xf4, 0x32);
         if dark {
-            let text2 = Color32::from_rgb(0xb8, 0xb8, 0xbf);
+            let text2 = Color32::from_rgb(0xc2, 0xcb, 0xda);
             Self {
-                ground: Color32::from_rgb(0x14, 0x14, 0x16),
-                surface: Color32::from_rgb(0x1e, 0x1e, 0x21),
-                inset: Color32::from_rgb(0x28, 0x28, 0x2c),
-                hover: Color32::from_rgb(0x30, 0x30, 0x35),
-                ink: Color32::from_rgb(0xf4, 0xf4, 0xf5),
+                ground: Color32::from_rgb(0x0d, 0x11, 0x1c),
+                surface: Color32::from_rgb(0x12, 0x18, 0x26),
+                inset: Color32::from_rgb(0x18, 0x21, 0x33),
+                hover: Color32::from_rgb(0x1d, 0x29, 0x40),
+                ink: Color32::from_rgb(0xf5, 0xf7, 0xfb),
                 ink2: text2,
-                muted: Color32::from_rgb(0x9c, 0x9c, 0xa4),
-                rule: Color32::from_rgb(0x2a, 0x2a, 0x2e),
-                rule_strong: Color32::from_rgb(0x36, 0x36, 0x3b),
-                field: Color32::from_rgb(0x4a, 0x4a, 0x50),
-                selected: Color32::from_rgba_unmultiplied(0xff, 0x95, 0x00, 0x1f),
+                muted: Color32::from_rgb(0xa7, 0xb1, 0xc2),
+                rule: Color32::from_rgb(0x23, 0x2d, 0x40),
+                rule_strong: Color32::from_rgb(0x31, 0x3d, 0x54),
+                field: Color32::from_rgb(0x55, 0x63, 0x78),
+                selected: Color32::from_rgb(0x1b, 0x27, 0x3c),
                 signal: orange,
                 accent: orange,
                 accent_edge: orange_edge,
                 grad_a: Color32::from_rgb(0xc2, 0x41, 0x0c),
                 grad_b: orange,
-                key_face: Color32::from_rgb(0x28, 0x28, 0x2c),
-                graphite: Color32::from_rgb(0x10, 0x10, 0x12),
-                graphite_ink: Color32::from_rgb(0xf4, 0xf4, 0xf5),
+                key_face: Color32::from_rgb(0x18, 0x21, 0x33),
+                graphite: Color32::from_rgb(0x08, 0x0c, 0x15),
+                graphite_ink: Color32::from_rgb(0xf5, 0xf7, 0xfb),
                 ok: lime,
                 off: Color32::from_rgb(0xff, 0x6a, 0x3d),
                 warn: text2,

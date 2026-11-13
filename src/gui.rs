@@ -123,15 +123,6 @@ impl SettingsPage {
         }
     }
 
-    fn description(self) -> &'static str {
-        match self {
-            SettingsPage::General => "Uygulama ve bu bilgisayar",
-            SettingsPage::Connection => "Ağ, parola ve cihaz izinleri",
-            SettingsPage::Sharing => "Kontrol, ekran ve pano",
-            SettingsPage::About => "Sürüm ve geliştiriciler",
-        }
-    }
-
     fn icon(self) -> Icon {
         match self {
             SettingsPage::General => Icon::Settings,
@@ -2622,7 +2613,7 @@ fn settings_nav_item(
 ) -> egui::Response {
     let palette = Palette::of(ui);
     let width = ui.available_width();
-    let height = if compact { 52.0 } else { 62.0 };
+    let height = if compact { 56.0 } else { 58.0 };
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     response
         .widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, page.title()));
@@ -2666,23 +2657,16 @@ fn settings_nav_item(
         } else {
             palette.ink2
         },
-        18.0,
+        if compact { 22.0 } else { 21.0 },
     );
     if !compact {
-        let text_x = rect.left() + 44.0;
+        let text_x = rect.left() + 46.0;
         ui.painter().text(
-            egui::pos2(text_x, rect.top() + 19.0),
+            egui::pos2(text_x, rect.center().y),
             Align2::LEFT_CENTER,
             page.title(),
-            design::medium(13.0),
+            design::medium(15.0),
             if selected { palette.ink } else { palette.ink2 },
-        );
-        ui.painter().text(
-            egui::pos2(text_x, rect.top() + 42.0),
-            Align2::LEFT_CENTER,
-            page.description(),
-            FontId::proportional(10.5),
-            palette.muted,
         );
     }
     if update_ready && page == SettingsPage::About {
@@ -2695,7 +2679,7 @@ fn settings_nav_item(
     }
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if compact {
-        response.on_hover_text(format!("{}\n{}", page.title(), page.description()))
+        response.on_hover_text(page.title())
     } else {
         response
     }
@@ -2807,7 +2791,7 @@ impl eframe::App for App {
         });
         egui::Panel::bottom("tabs")
             .show_separator_line(false)
-            .exact_size(84.0)
+            .exact_size(96.0)
             .resizable(false)
             .frame(egui::Frame::new().fill(palette.surface))
             .show(root, |ui| {
@@ -2817,13 +2801,13 @@ impl eframe::App for App {
                     bar.top() + 0.5,
                     Stroke::new(1.0, palette.rule),
                 );
-                let (width, gap) = (78.0, 10.0);
+                let (width, gap) = (92.0, 12.0);
                 let n = Page::ALL.len() as f32;
                 let mut x = bar.center().x - (n * width + (n - 1.0) * gap) / 2.0;
                 for page in Page::ALL {
                     let item = egui::Rect::from_min_size(
-                        egui::pos2(x, bar.center().y - 29.0),
-                        Vec2::new(width, 58.0),
+                        egui::pos2(x, bar.center().y - 34.0),
+                        Vec2::new(width, 68.0),
                     );
                     x += width + gap;
                     let selected = self.page == page;
@@ -2856,27 +2840,27 @@ impl eframe::App for App {
                     };
                     design::icon(
                         painter,
-                        item.center() - Vec2::new(0.0, 9.0),
+                        item.center() - Vec2::new(0.0, 11.0),
                         page.icon(),
                         icon_ink,
-                        20.0,
+                        24.0,
                     );
                     if page == Page::Settings && update_ready {
                         red_dot(
                             painter,
-                            item.center() + Vec2::new(13.0, -18.0),
+                            item.center() + Vec2::new(16.0, -22.0),
                             4.5,
                             palette,
                         );
                     }
                     painter.text(
-                        item.center() + Vec2::new(0.0, 14.0),
+                        item.center() + Vec2::new(0.0, 18.0),
                         Align2::CENTER_CENTER,
                         page.tab(),
                         if selected {
-                            design::medium(11.5)
+                            design::medium(13.5)
                         } else {
-                            FontId::proportional(11.5)
+                            FontId::proportional(13.5)
                         },
                         text_ink,
                     );
@@ -6371,8 +6355,8 @@ impl App {
     fn page_settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let available = ui.available_size();
         let height = available.y.max(360.0);
-        let compact = available.x < 860.0;
-        let nav_width = if compact { 54.0 } else { 190.0 };
+        let compact = available.x < 940.0;
+        let nav_width = if compact { 58.0 } else { 220.0 };
         let update_ready = matches!(*self.update.lock().unwrap(), Upd::Available(_));
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
@@ -6384,11 +6368,11 @@ impl App {
                         ui.add_space(2.0);
                     } else {
                         ui.label(
-                            RichText::new("Kategoriler")
-                                .font(design::medium(11.0))
-                                .color(Palette::of(ui).muted),
+                            RichText::new("AYARLAR MENÜSÜ")
+                                .font(design::semibold(14.0))
+                                .color(Palette::of(ui).ink2),
                         );
-                        ui.add_space(8.0);
+                        ui.add_space(12.0);
                     }
                     for page in SettingsPage::ALL {
                         if settings_nav_item(
@@ -6415,12 +6399,10 @@ impl App {
                 |ui| {
                     ui.label(
                         RichText::new(page.title())
-                            .font(design::semibold(18.0))
+                            .font(design::semibold(20.0))
                             .color(Palette::of(ui).ink),
                     );
-                    ui.add_space(3.0);
-                    hint(ui, page.description());
-                    ui.add_space(14.0);
+                    ui.add_space(16.0);
                     egui::ScrollArea::vertical()
                         .id_salt("settings_content")
                         .auto_shrink([false, false])
@@ -6454,16 +6436,12 @@ impl App {
             );
         }
         if page == SettingsPage::General {
-            section(ui, Some("Genel"), |ui| {
+            section(ui, Some("Uygulama"), |ui| {
                 let mut au = autostart_on();
                 if toggle_row(
                     ui,
                     "Bilgisayar açılınca Mause'u başlat",
-                    Some(if AUTOSTART_OK {
-                        "Oturum açıldığında Mause arka planda çalışır."
-                    } else {
-                        "Bu platformda henüz desteklenmiyor."
-                    }),
+                    (!AUTOSTART_OK).then_some("Bu platformda henüz desteklenmiyor."),
                     &mut au,
                     AUTOSTART_OK,
                 )
@@ -6491,7 +6469,7 @@ impl App {
                 if toggle_row(
                 ui,
                 "Eşleşmiş cihazlar paylaşım ayarlarımı değiştirebilsin",
-                Some("Karşıda bir akış tuşuna basılınca bu bilgisayarda da aynı akış açılır ya da kapanır. Kapalıysa karşı taraf yalnız kapatabilir."),
+                    Some("Karşı cihaz paylaşım akışlarını açıp kapatabilir; bu izin kapalıyken yalnızca kapatabilir."),
                 &mut remote,
                 true,
             )
@@ -6504,24 +6482,18 @@ impl App {
         }
 
         if page == SettingsPage::Connection {
-            section(ui, Some("Ağ ve güvenlik"), |ui| {
+            section(ui, Some("Bu bilgisayar"), |ui| {
                 let mut changed = false;
-                setting_row(
-                    ui,
-                    "Bu PC'nin adı",
-                    Some("Diğer bilgisayarda bu adla görünür."),
-                    220.0,
-                    |ui| {
-                        changed |= ui
-                            .add(
-                                egui::TextEdit::singleline(&mut self.cfg.name)
-                                    .desired_width(200.0)
-                                    .min_size(Vec2::new(0.0, 34.0))
-                                    .align(Align2::LEFT_CENTER),
-                            )
-                            .lost_focus();
-                    },
-                );
+                setting_row(ui, "Bu PC'nin adı", None, 220.0, |ui| {
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.cfg.name)
+                                .desired_width(200.0)
+                                .min_size(Vec2::new(0.0, 34.0))
+                                .align(Align2::LEFT_CENTER),
+                        )
+                        .lost_focus();
+                });
                 divider(ui);
                 setting_row(ui, "Port", Some("İki PC'de aynı olmalı."), 100.0, |ui| {
                     changed |= ui
@@ -6534,22 +6506,16 @@ impl App {
                         .lost_focus();
                 });
                 divider(ui);
-                setting_row(
-                    ui,
-                    "Ekran çözünürlüğü",
-                    Some("Otomatik algılanır; gerekirse düzeltin."),
-                    300.0,
-                    |ui| {
-                        if design::key(ui, "Yeniden algıla", KeyKind::Plain, true, 0.0).clicked() {
-                            if let Some((w, h)) = crate::platform::detect_screen() {
-                                (self.cfg.w, self.cfg.h) = (w, h);
-                            }
+                setting_row(ui, "Ekran çözünürlüğü", None, 300.0, |ui| {
+                    if design::key(ui, "Yeniden algıla", KeyKind::Plain, true, 0.0).clicked() {
+                        if let Some((w, h)) = crate::platform::detect_screen() {
+                            (self.cfg.w, self.cfg.h) = (w, h);
                         }
-                        ui.add(egui::DragValue::new(&mut self.cfg.h).range(240..=16384));
-                        ui.label("×");
-                        ui.add(egui::DragValue::new(&mut self.cfg.w).range(320..=16384));
-                    },
-                );
+                    }
+                    ui.add(egui::DragValue::new(&mut self.cfg.h).range(240..=16384));
+                    ui.label("×");
+                    ui.add(egui::DragValue::new(&mut self.cfg.w).range(320..=16384));
+                });
                 if changed {
                     self.restart();
                 }
