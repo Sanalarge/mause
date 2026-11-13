@@ -770,9 +770,13 @@ mod tests {
 pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{
-        ChangeWindowAttributesAux, ConnectionExt, CreateWindowAux, WindowClass,
+        AtomEnum, ChangeWindowAttributesAux, ConnectionExt, CreateWindowAux, PropMode, WindowClass,
     };
-    if super::wayland::active() || w <= 0 || h <= 0 {
+    use x11rb::wrapper::ConnectionExt as _;
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    if super::wayland::active() && super::wayland_flash::show(x, y, w, h).is_ok() {
         return;
     }
     let Ok((conn, n)) = x11rb::connect(None) else {
@@ -798,7 +802,41 @@ pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
         screen.root_visual,
         &aux,
     );
-    if made.is_err() || conn.map_window(win).is_err() {
+    if made.is_err() {
+        return;
+    }
+    // XWayland fallback for compositors without layer-shell (e.g. GNOME).
+    // An empty input shape lets the pointer pass through the strip.
+    let _ = x11rb::protocol::shape::ConnectionExt::shape_rectangles(
+        &conn,
+        x11rb::protocol::shape::SO::SET,
+        x11rb::protocol::shape::SK::INPUT,
+        x11rb::protocol::xproto::ClipOrdering::UNSORTED,
+        win,
+        0,
+        0,
+        &[],
+    );
+    let atom = |name: &[u8]| {
+        conn.intern_atom(false, name)
+            .ok()?
+            .reply()
+            .ok()
+            .map(|r| r.atom)
+    };
+    if let Some(hints) = atom(b"WM_HINTS") {
+        let _ = conn.change_property32(
+            PropMode::REPLACE,
+            win,
+            hints,
+            hints,
+            &[1, 0, 0, 0, 0, 0, 0, 0, 0],
+        );
+    }
+    if let (Some(state), Some(above)) = (atom(b"_NET_WM_STATE"), atom(b"_NET_WM_STATE_ABOVE")) {
+        let _ = conn.change_property32(PropMode::REPLACE, win, state, AtomEnum::ATOM, &[above]);
+    }
+    if conn.map_window(win).is_err() {
         return;
     }
     for step in 0..super::FLASH_STEPS {

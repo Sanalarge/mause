@@ -23,6 +23,7 @@ Mause is an open-source software KVM for controlling computers and Android devic
 | --- | --- |
 | Seamless input | Share keyboard and mouse across Windows, macOS, Linux and Android devices. |
 | Screen layout | Arrange devices spatially and switch by moving through a screen edge. |
+| Per-computer preferences | Recognize connected PCs by identity and automatically restore their saved layout and sharing settings. PCs sharing a saved position are placed next to each other when connected together. |
 | Secure pairing | Confirm a matching code on both devices before a connection is trusted. |
 | Encrypted transport | Protect paired-device traffic with end-to-end encryption. |
 | Clipboard and files | Move text and files between paired computers. |

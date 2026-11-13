@@ -341,7 +341,21 @@ impl App {
         app
     }
 
-    fn sync_perms(&self) {
+    fn sync_perms(&mut self) {
+        if !self.cfg.active_peer.is_empty() {
+            let bits = flows::bits(&self.cfg)
+                | if self.cfg.allow_screen_out {
+                    flows::SCREEN_OUT
+                } else {
+                    0
+                };
+            let id = self.cfg.active_peer.clone();
+            self.cfg.device_perms.retain(|(i, _)| *i != id);
+            self.cfg.device_perms.push((id.clone(), bits));
+            if let Some(sh) = &self.shared {
+                sh.device_perms.lock().unwrap().insert(id, bits);
+            }
+        }
         if let Some(sh) = &self.shared {
             sh.metrics_share
                 .store(self.cfg.share_metrics, Ordering::Relaxed);
@@ -378,6 +392,12 @@ impl App {
         self.cfg.trusted.retain(|(trusted, _)| trusted != id);
         self.cfg.held.retain(|held| held != id);
         self.cfg.unplace(id);
+        self.cfg.peer_profiles.retain(|(i, _)| i != id);
+        self.cfg.device_perms.retain(|(i, _)| i != id);
+        if self.cfg.active_peer == id {
+            self.cfg.activate_peer("");
+            self.cfg.peer_profiles.retain(|(i, _)| i != id);
+        }
         if let Some(sh) = &self.shared {
             sh.pairs.lock().unwrap().remove(id);
         }
@@ -530,12 +550,13 @@ impl App {
         if let Some(sh) = &self.shared {
             sh.apply_pref(pref, on);
         }
-        self.cfg.save();
+        self.sync_perms();
     }
 
     fn toggle_flow(&mut self, flow: Flow, on: bool) {
         let peer = self.peer_prefs();
-        self.toggle_flow_for("", flow, on, peer);
+        let id = self.cfg.active_peer.clone();
+        self.toggle_flow_for(&id, flow, on, peer);
     }
 
     fn device_bits(&self, id: &str) -> u16 {
@@ -557,6 +578,13 @@ impl App {
         let bits = if on { bits | bit } else { bits & !bit };
         self.cfg.device_perms.retain(|(d, _)| d != id);
         self.cfg.device_perms.push((id.to_owned(), bits));
+        if self.cfg.active_peer == id {
+            if let Some(pref) = Pref::ALL.into_iter().find(|pref| pref.bit() == bit) {
+                flows::set(&mut self.cfg, pref, on);
+            } else if bit == flows::SCREEN_OUT {
+                self.cfg.allow_screen_out = on;
+            }
+        }
         if let Some(sh) = &self.shared {
             sh.device_perms.lock().unwrap().insert(id.to_owned(), bits);
         }
@@ -566,9 +594,7 @@ impl App {
     fn toggle_flow_for(&mut self, id: &str, flow: Flow, on: bool, peer: Option<u16>) {
         for (at, pref, value) in flow.sync_changes(on) {
             match at {
-                Where::Local if !id.is_empty() && !matches!(pref, Pref::RelayIn | Pref::MicIn) => {
-                    self.set_device_pref(id, pref.bit(), value)
-                }
+                Where::Local if !id.is_empty() => self.set_device_pref(id, pref.bit(), value),
                 Where::Local => self.set_pref(pref, value),
                 Where::Remote => {
                     if let (Some(sh), Some(bits)) = (&self.shared, peer) {
@@ -601,6 +627,12 @@ impl App {
             .collect();
         if !changed.is_empty() {
             for (id, bits) in changed {
+                if self.cfg.active_peer == id {
+                    for pref in Pref::ALL {
+                        flows::set(&mut self.cfg, pref, bits & pref.bit() != 0);
+                    }
+                    self.cfg.allow_screen_out = bits & flows::SCREEN_OUT != 0;
+                }
                 self.cfg.device_perms.retain(|(d, _)| *d != id);
                 self.cfg.device_perms.push((id, bits));
             }
@@ -614,6 +646,70 @@ impl App {
             flows::set(&mut self.cfg, pref, on);
         }
         self.cfg.save();
+    }
+
+    fn absorb_connected_peer(&mut self) {
+        if self.sync_connected_peer() {
+            self.cfg.save();
+        }
+        if let Some(sh) = &self.shared {
+            *sh.config.lock().unwrap() = Some(self.cfg.clone());
+        }
+    }
+
+    fn sync_connected_peer(&mut self) -> bool {
+        let Some(sh) = self.shared.clone() else {
+            return false;
+        };
+        let links = sh.links.lock().unwrap().clone();
+        let selected = sh.primary_link().map(|l| l.id).unwrap_or_default();
+        let profile_changed = self.cfg.activate_peer(&selected);
+        let mut changed = profile_changed;
+        for link in &links {
+            if link.id.is_empty() {
+                continue;
+            }
+            if self.cfg.side_of(&link.id).is_none() {
+                self.cfg.place(&link.id, link.side, &link.parent);
+                changed = true;
+            }
+            for (id, name) in &mut self.cfg.trusted {
+                if *id == link.id && !link.name.is_empty() && *name != link.name {
+                    *name = link.name.clone();
+                    changed = true;
+                }
+            }
+            for (id, name, _) in &mut self.cfg.paired {
+                if *id == link.id && !link.name.is_empty() && *name != link.name {
+                    *name = link.name.clone();
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            sh.apply_connection_settings(&self.cfg);
+        }
+        if profile_changed {
+            self.screen_tex = None;
+            self.peer_files = None;
+            *self.remote.lock().unwrap() = Pane::default();
+            for (kind, selected, devices) in [
+                (Kind::Sink, &self.cfg.audio_sink, &self.audio.sinks),
+                (Kind::Source, &self.cfg.audio_source, &self.audio.sources),
+            ] {
+                if !selected.is_empty() && devices.iter().any(|d| d.name == *selected) {
+                    audio::set_default(kind, selected);
+                }
+            }
+        }
+        if self
+            .popup_device
+            .as_ref()
+            .is_some_and(|id| !links.iter().any(|l| l.key() == *id))
+        {
+            self.popup_device = None;
+        }
+        changed
     }
 
     fn peer_prefs(&self) -> Option<u16> {
@@ -1134,14 +1230,7 @@ enum LayoutAction {
 
 const STRIP: f32 = 62.0;
 
-fn step(cell: (i32, i32), side: Side) -> (i32, i32) {
-    match side {
-        Side::Left => (cell.0 - 1, cell.1),
-        Side::Right => (cell.0 + 1, cell.1),
-        Side::Top => (cell.0, cell.1 - 1),
-        Side::Bottom => (cell.0, cell.1 + 1),
-    }
-}
+use crate::layout::step;
 
 fn link_points(
     from: egui::Rect,
@@ -2533,6 +2622,7 @@ impl eframe::App for App {
         }
         self.absorb_learned();
         self.absorb_remote_prefs();
+        self.absorb_connected_peer();
         self.tray_tick(ctx);
         if self.popup.is_some() || self.watching() {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
@@ -3421,134 +3511,147 @@ impl App {
         let (min_y, max_y) = (ys.clone().min().unwrap_or(0), ys.max().unwrap_or(0));
         let (cols, rows) = ((max_x - min_x + 1) as f32, (max_y - min_y + 1) as f32);
 
-        let width = ui.available_width();
-        let aspect = (self.cfg.h as f32 / self.cfg.w.max(1) as f32).clamp(0.5, 0.75);
-        let (gap_x, gap_y, margin) = (88.0, 64.0, 52.0);
-        let mw = (width * 0.24)
-            .clamp(132.0, 190.0)
-            .min((width - 2.0 * margin - (cols - 1.0) * gap_x) / cols)
-            .max(90.0);
-        let screen = Vec2::new(mw, (mw * aspect).round());
-        let stand = 16.0;
-        let strip = if nodes.iter().any(|n| n.link.is_some()) {
-            STRIP
-        } else {
-            0.0
-        };
-        let monitor_h = screen.y + stand + strip;
-        let canvas_h =
-            (rows * monitor_h + (rows - 1.0) * gap_y + 2.0 * margin).max(monitor_h + 120.0);
-        let (canvas, _) = ui.allocate_exact_size(Vec2::new(width, canvas_h), Sense::hover());
-        let painter = ui.painter().clone();
-        painter.rect(
-            canvas,
-            16,
-            palette.inset,
-            Stroke::new(1.0, palette.rule_strong),
-            StrokeKind::Inside,
-        );
-        let dots = painter.with_clip_rect(canvas.shrink(2.0));
-        let mut y = canvas.top() + 14.0;
-        while y < canvas.bottom() {
-            let mut x = canvas.left() + 14.0;
-            while x < canvas.right() {
-                dots.circle_filled(egui::pos2(x, y), 1.0, palette.rule_strong);
-                x += 22.0;
-            }
-            y += 22.0;
-        }
-
-        let lift = Vec2::new(0.0, (stand + strip) / 2.0);
-        let foot_of = |key: &str| {
-            let has_strip = nodes.iter().any(|n| n.key == key && n.link.is_some());
-            Vec2::new(0.0, stand + if has_strip { STRIP } else { 0.0 })
-        };
-        let (mid_x, mid_y) = ((min_x + max_x) as f32 / 2.0, (min_y + max_y) as f32 / 2.0);
-        let rect_of = |cell: (i32, i32)| {
-            let at = canvas.center()
-                + Vec2::new(
-                    (cell.0 as f32 - mid_x) * (screen.x + gap_x),
-                    (cell.1 as f32 - mid_y) * (monitor_h + gap_y),
-                )
-                - lift;
-            egui::Rect::from_center_size(at, screen)
-        };
-        let cell_of = |key: &str| {
-            nodes
-                .iter()
-                .find(|n| n.key == key)
-                .map_or((0, 0), |n| n.cell)
-        };
-        let own = rect_of((0, 0));
-        monitor(
-            &painter,
-            palette,
-            own,
-            stand,
-            &self.cfg.name,
-            "Bu bilgisayar",
-            palette.ink2,
-            palette.rule_strong,
-            self.performance_visible(own),
-        );
-        self.performance_row(ui, &painter, palette, own, None);
-
-        let mut action: Option<LayoutAction> = None;
-        for node in &nodes {
-            let from = rect_of(cell_of(&node.parent));
-            let to = rect_of(node.cell);
-            let feet = (foot_of(&node.parent), foot_of(&node.key));
-            let (a, b, edge) = link_points(from, to, node.side, feet);
-            let tone = node.tone;
-            if node.live {
-                painter.line_segment([a, b], Stroke::new(2.0, tone));
-            } else {
-                painter.extend(egui::Shape::dashed_line(
-                    &[a, b],
-                    Stroke::new(1.5, tone),
-                    6.0,
-                    5.0,
-                ));
-            }
-            let mid = a + (b - a) / 2.0;
-            painter.circle(mid, 15.0, palette.surface, Stroke::new(1.5, tone));
-            design::icon(&painter, mid, Icon::Share, tone, 15.0);
-            let inset = if matches!(node.side, Side::Left | Side::Right) {
-                Vec2::new(0.0, 12.0)
-            } else {
-                Vec2::new(12.0, 0.0)
-            };
-            painter.line_segment([edge[0] + inset, edge[1] - inset], Stroke::new(3.0, tone));
-            if let Some(a) = self.layout_device(ui, &painter, palette, to, stand, node) {
-                action = Some(a);
-            }
-        }
-
-        let anchors = std::iter::once((String::new(), String::new(), (0, 0), None)).chain(
-            nodes
-                .iter()
-                .filter(|n| !n.id.is_empty())
-                .map(|n| (n.key.clone(), n.id.clone(), n.cell, Some(n.side.opposite()))),
-        );
-        for (key, id, cell, back) in anchors {
-            let rect = rect_of(cell);
-            for side in Side::ALL {
-                if Some(side) == back || taken.contains(&step(cell, side)) {
-                    continue;
-                }
-                let at = match side {
-                    Side::Left => rect.left_center() - Vec2::new(36.0, 0.0),
-                    Side::Right => rect.right_center() + Vec2::new(36.0, 0.0),
-                    Side::Top => rect.center_top() - Vec2::new(0.0, 30.0),
-                    Side::Bottom => rect.center_bottom() + foot_of(&key) + Vec2::new(0.0, 30.0),
+        let action = egui::ScrollArea::horizontal()
+            .id_salt("device_layout_horizontal")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                let width = ui
+                    .available_width()
+                    .max(cols * 90.0 + (cols - 1.0) * 88.0 + 104.0);
+                let aspect = (self.cfg.h as f32 / self.cfg.w.max(1) as f32).clamp(0.5, 0.75);
+                let (gap_x, gap_y, margin) = (88.0, 64.0, 52.0);
+                let mw = (width * 0.24)
+                    .clamp(132.0, 190.0)
+                    .min((width - 2.0 * margin - (cols - 1.0) * gap_x) / cols)
+                    .max(90.0);
+                let screen = Vec2::new(mw, (mw * aspect).round());
+                let stand = 16.0;
+                let strip = if nodes.iter().any(|n| n.link.is_some()) {
+                    STRIP
+                } else {
+                    0.0
                 };
-                if let Some(a) =
-                    self.layout_plus(ui, &painter, palette, (&key, &id), side, at, &links)
-                {
-                    action = Some(a);
+                let monitor_h = screen.y + stand + strip;
+                let canvas_h =
+                    (rows * monitor_h + (rows - 1.0) * gap_y + 2.0 * margin).max(monitor_h + 120.0);
+                let (canvas, _) =
+                    ui.allocate_exact_size(Vec2::new(width, canvas_h), Sense::hover());
+                let painter = ui.painter().clone();
+                painter.rect(
+                    canvas,
+                    16,
+                    palette.inset,
+                    Stroke::new(1.0, palette.rule_strong),
+                    StrokeKind::Inside,
+                );
+                let dots = painter.with_clip_rect(canvas.shrink(2.0));
+                let mut y = canvas.top() + 14.0;
+                while y < canvas.bottom() {
+                    let mut x = canvas.left() + 14.0;
+                    while x < canvas.right() {
+                        dots.circle_filled(egui::pos2(x, y), 1.0, palette.rule_strong);
+                        x += 22.0;
+                    }
+                    y += 22.0;
                 }
-            }
-        }
+
+                let lift = Vec2::new(0.0, (stand + strip) / 2.0);
+                let foot_of = |key: &str| {
+                    let has_strip = nodes.iter().any(|n| n.key == key && n.link.is_some());
+                    Vec2::new(0.0, stand + if has_strip { STRIP } else { 0.0 })
+                };
+                let (mid_x, mid_y) = ((min_x + max_x) as f32 / 2.0, (min_y + max_y) as f32 / 2.0);
+                let rect_of = |cell: (i32, i32)| {
+                    let at = canvas.center()
+                        + Vec2::new(
+                            (cell.0 as f32 - mid_x) * (screen.x + gap_x),
+                            (cell.1 as f32 - mid_y) * (monitor_h + gap_y),
+                        )
+                        - lift;
+                    egui::Rect::from_center_size(at, screen)
+                };
+                let cell_of = |key: &str| {
+                    nodes
+                        .iter()
+                        .find(|n| n.key == key)
+                        .map_or((0, 0), |n| n.cell)
+                };
+                let own = rect_of((0, 0));
+                monitor(
+                    &painter,
+                    palette,
+                    own,
+                    stand,
+                    &self.cfg.name,
+                    "Bu bilgisayar",
+                    palette.ink2,
+                    palette.rule_strong,
+                    self.performance_visible(own),
+                );
+                self.performance_row(ui, &painter, palette, own, None);
+
+                let mut action: Option<LayoutAction> = None;
+                for node in &nodes {
+                    let from = rect_of(cell_of(&node.parent));
+                    let to = rect_of(node.cell);
+                    let feet = (foot_of(&node.parent), foot_of(&node.key));
+                    let (a, b, edge) = link_points(from, to, node.side, feet);
+                    let tone = node.tone;
+                    if node.live {
+                        painter.line_segment([a, b], Stroke::new(2.0, tone));
+                    } else {
+                        painter.extend(egui::Shape::dashed_line(
+                            &[a, b],
+                            Stroke::new(1.5, tone),
+                            6.0,
+                            5.0,
+                        ));
+                    }
+                    let mid = a + (b - a) / 2.0;
+                    painter.circle(mid, 15.0, palette.surface, Stroke::new(1.5, tone));
+                    design::icon(&painter, mid, Icon::Share, tone, 15.0);
+                    let inset = if matches!(node.side, Side::Left | Side::Right) {
+                        Vec2::new(0.0, 12.0)
+                    } else {
+                        Vec2::new(12.0, 0.0)
+                    };
+                    painter
+                        .line_segment([edge[0] + inset, edge[1] - inset], Stroke::new(3.0, tone));
+                    if let Some(a) = self.layout_device(ui, &painter, palette, to, stand, node) {
+                        action = Some(a);
+                    }
+                }
+
+                let anchors = std::iter::once((String::new(), String::new(), (0, 0), None)).chain(
+                    nodes
+                        .iter()
+                        .filter(|n| !n.id.is_empty())
+                        .map(|n| (n.key.clone(), n.id.clone(), n.cell, Some(n.side.opposite()))),
+                );
+                for (key, id, cell, back) in anchors {
+                    let rect = rect_of(cell);
+                    for side in Side::ALL {
+                        if Some(side) == back || taken.contains(&step(cell, side)) {
+                            continue;
+                        }
+                        let at = match side {
+                            Side::Left => rect.left_center() - Vec2::new(36.0, 0.0),
+                            Side::Right => rect.right_center() + Vec2::new(36.0, 0.0),
+                            Side::Top => rect.center_top() - Vec2::new(0.0, 30.0),
+                            Side::Bottom => {
+                                rect.center_bottom() + foot_of(&key) + Vec2::new(0.0, 30.0)
+                            }
+                        };
+                        if let Some(a) =
+                            self.layout_plus(ui, &painter, palette, (&key, &id), side, at, &links)
+                        {
+                            action = Some(a);
+                        }
+                    }
+                }
+                action
+            })
+            .inner;
         match action {
             Some(LayoutAction::Place(id, side, parent)) => {
                 let unpinned = nodes
@@ -3672,9 +3775,10 @@ impl App {
             .cfg
             .placed
             .iter()
+            .filter(|(id, ..)| !running || links.iter().any(|l| l.id == *id))
             .map(
                 |(id, side, parent)| match links.iter().find(|l| l.id == *id) {
-                    Some(l) => live(l, true, parent.clone(), *side),
+                    Some(l) => live(l, true, l.parent.clone(), l.side),
                     None => Node {
                         key: id.clone(),
                         id: id.clone(),
@@ -3695,33 +3799,32 @@ impl App {
             .collect();
         for l in links {
             if l.id.is_empty() || self.cfg.side_of(&l.id).is_none() {
-                pending.push(live(l, false, String::new(), l.side));
+                pending.push(live(l, false, l.parent.clone(), l.side));
             }
         }
-        let mut cells: std::collections::HashMap<String, (i32, i32)> =
-            std::collections::HashMap::from([(String::new(), (0, 0))]);
-        let mut taken: HashSet<(i32, i32)> = HashSet::from([(0, 0)]);
-        let mut nodes = Vec::new();
-        loop {
-            let before = pending.len();
-            let mut rest = Vec::new();
-            for mut node in pending {
-                let Some(&at) = cells.get(&node.parent) else {
-                    rest.push(node);
-                    continue;
-                };
-                node.cell = step(at, node.side);
-                if taken.insert(node.cell) {
-                    cells.insert(node.key.clone(), node.cell);
-                    nodes.push(node);
-                }
-            }
-            pending = rest;
-            if pending.is_empty() || pending.len() == before {
-                break;
-            }
-        }
-        nodes
+        pending.sort_by_key(|node| !node.live);
+        let positions = crate::layout::resolve(
+            pending
+                .iter()
+                .map(|node| crate::layout::Placement {
+                    key: node.key.clone(),
+                    parent: node.parent.clone(),
+                    side: node.side,
+                    cell: (0, 0),
+                })
+                .collect(),
+        );
+        positions
+            .into_iter()
+            .filter_map(|position| {
+                let index = pending.iter().position(|node| node.key == position.key)?;
+                let mut node = pending.remove(index);
+                node.parent = position.parent;
+                node.side = position.side;
+                node.cell = position.cell;
+                Some(node)
+            })
+            .collect()
     }
 
     fn layout_candidates(
@@ -4457,7 +4560,7 @@ impl App {
             (core::Feat::Mic, Pref::MicIn),
         ] {
             if serves(feat) {
-                mine |= flows::bits(&self.cfg) & pref.bit();
+                mine |= self.device_bits(&link.id) & pref.bit();
             }
         }
         let peer = link.prefs;
@@ -4506,16 +4609,16 @@ impl App {
 
     fn popup_link(&self) -> Option<core::Link> {
         let sh = self.shared.as_ref()?;
-        let links = sh.links.lock().unwrap();
+        let links = sh.links.lock().unwrap().clone();
         let chosen = self
             .popup_device
             .as_ref()
             .and_then(|id| links.iter().find(|l| l.key() == *id));
-        let primary = match &*sh.state.lock().unwrap() {
-            State::Connected { peer, .. } => links.iter().find(|l| l.name == *peer),
-            _ => None,
-        };
-        chosen.or(primary).or(links.first()).cloned()
+        let primary = sh.primary_link();
+        chosen
+            .cloned()
+            .or(primary)
+            .or_else(|| links.first().cloned())
     }
 
     fn popup_keys(&self, ui: &mut egui::Ui, dir: Dir, link: &core::Link) -> Vec<PopupAction> {
@@ -5795,15 +5898,7 @@ impl App {
                     changed
                 });
                 if changed {
-                    if k == 0 {
-                        self.cfg.relay_in = on
-                    } else {
-                        self.cfg.mic_in = on
-                    }
-                    if let Some(s) = &self.shared {
-                        s.want[k].store(on, Ordering::Relaxed);
-                    }
-                    self.cfg.save();
+                    self.set_pref(if k == 0 { Pref::RelayIn } else { Pref::MicIn }, on);
                 }
                 divider(ui);
             }
@@ -6136,6 +6231,20 @@ impl App {
     }
 
     fn page_settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if !self.cfg.active_peer.is_empty() {
+            let name = self
+                .shared
+                .as_ref()
+                .and_then(|sh| sh.primary_link())
+                .map(|link| link.name)
+                .unwrap_or_else(|| self.cfg.active_peer.clone());
+            hint(
+                ui,
+                &format!(
+                    "Paylaşım ayarları {name} için hatırlanır; bağlı bilgisayar değişince otomatik yüklenir."
+                ),
+            );
+        }
         section(ui, Some("Genel"), |ui| {
             let mut au = autostart_on();
             if toggle_row(
@@ -6374,11 +6483,7 @@ impl App {
             .on_disabled_hover_text(unsupported)
             .changed()
             {
-                self.cfg.share_text = st;
-                if let Some(s) = &self.shared {
-                    s.share_text.store(st, Ordering::Relaxed);
-                }
-                self.cfg.save();
+                self.set_pref(Pref::ShareText, st);
             }
             divider(ui);
             let inbox = transfer::inbox();
@@ -7272,6 +7377,105 @@ mod layout_tests {
 
     fn fixture(page: Page, theme: u8) -> App {
         ui_fixture(page, theme)
+    }
+
+    fn connected_pc(id: &str, name: &str, session: u64) -> core::Link {
+        core::Link {
+            id: id.into(),
+            name: name.into(),
+            session,
+            ip: format!("10.0.0.{session}"),
+            side: Side::Right,
+            parent: String::new(),
+            control: Control::Local,
+            prefs: Some(1),
+            sending: [false; 2],
+            screen_out: false,
+            version: Some("test".into()),
+        }
+    }
+
+    #[test]
+    fn connecting_a_different_pc_restores_its_settings_layout_and_current_name() {
+        let mut app = fixture(Page::Share, 1);
+        let sh = Shared::new(false);
+        app.shared = Some(sh.clone());
+        app.cfg.paired = vec![
+            ("A".into(), "Old A".into(), "secret-a".into()),
+            ("B".into(), "Old B".into(), "secret-b".into()),
+        ];
+        app.cfg.place("A", Side::Right, "");
+        app.cfg.place("B", Side::Right, "");
+        app.cfg.activate_peer("A");
+        app.cfg.relay_latency = 150;
+        app.cfg.relay_in = true;
+        app.cfg.activate_peer("B");
+        app.cfg.relay_latency = 50;
+        for (id, name, session, latency, relay) in [
+            ("A", "Current A", 1, 150, true),
+            ("B", "Current B", 2, 50, false),
+            ("A", "Renamed A", 3, 150, true),
+        ] {
+            let link = connected_pc(id, name, session);
+            *sh.links.lock().unwrap() = vec![link.clone()];
+            app.popup_device = Some("old-offline-id".into());
+            app.sync_connected_peer();
+            assert_eq!(app.cfg.active_peer, id);
+            assert_eq!(app.cfg.relay_latency, latency);
+            assert_eq!(sh.latency.load(Ordering::Relaxed), latency);
+            assert_eq!(app.cfg.relay_in, relay);
+            assert_eq!(app.popup_link().unwrap().name, name);
+            assert!(app.popup_device.is_none());
+            let nodes = app.layout_nodes(&[link], true, Palette::new(true));
+            assert_eq!(
+                nodes.len(),
+                1,
+                "saved offline PCs must not hide the connected PC"
+            );
+            assert_eq!(nodes[0].id, id);
+            assert_eq!(nodes[0].name, name);
+            assert_eq!(nodes[0].cell, (1, 0));
+            assert_eq!(
+                app.cfg.paired.iter().find(|(i, ..)| i == id).unwrap().1,
+                name
+            );
+        }
+        sh.links.lock().unwrap().clear();
+        app.sync_connected_peer();
+        assert!(app.cfg.active_peer.is_empty());
+        assert!(app.layout_nodes(&[], true, Palette::new(true)).is_empty());
+        assert!(app.cfg.side_of("A").is_some() && app.cfg.side_of("B").is_some());
+    }
+
+    #[test]
+    fn saved_and_live_layout_collisions_display_every_pc_in_an_adjacent_cell() {
+        let mut app = fixture(Page::Share, 1);
+        let mut links = Vec::new();
+        for session in 1..=6 {
+            let id = format!("id{session}");
+            app.cfg.place(&id, Side::Right, "");
+            links.push(connected_pc(&id, &format!("PC {session}"), session));
+        }
+        for running in [false, true] {
+            let nodes = app.layout_nodes(
+                if running { &links } else { &[] },
+                running,
+                Palette::new(true),
+            );
+            assert_eq!(nodes.len(), 6);
+            for (index, node) in nodes.iter().enumerate() {
+                assert_eq!(node.cell, (index as i32 + 1, 0));
+                assert_eq!(
+                    node.parent,
+                    if index == 0 {
+                        String::new()
+                    } else {
+                        format!("id{index}")
+                    }
+                );
+                assert_eq!(app.cfg.parent_of(&node.id), Some(""));
+            }
+        }
     }
 
     #[test]

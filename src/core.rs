@@ -55,6 +55,34 @@ impl Link {
     }
 }
 
+fn arrange_links(links: &mut [Link], cfg: Option<&Config>) {
+    // Connection order keeps existing devices closest to their saved position,
+    // and moves later arrivals beyond occupied cells.
+    let placements = crate::layout::resolve(
+        links
+            .iter()
+            .map(|link| {
+                let saved_side = cfg.and_then(|cfg| cfg.side_of(&link.id));
+                let parent = cfg
+                    .and_then(|cfg| cfg.parent_of(&link.id))
+                    .unwrap_or(&link.parent);
+                crate::layout::Placement {
+                    key: link.key(),
+                    parent: parent.to_owned(),
+                    side: saved_side.unwrap_or(link.side),
+                    cell: (0, 0),
+                }
+            })
+            .collect(),
+    );
+    for placement in placements {
+        if let Some(link) = links.iter_mut().find(|link| link.key() == placement.key) {
+            link.parent = placement.parent;
+            link.side = placement.side;
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct DeviceInfo {
     pub caps: Vec<hardware::Cap>,
@@ -195,6 +223,7 @@ impl Perms {
 }
 
 pub struct Shared {
+    pub config: Mutex<Option<Config>>,
     #[cfg(test)]
     pub test_transfer: crate::test_support::TransferSettings,
     pub stop: AtomicBool,
@@ -260,6 +289,7 @@ pub struct Shared {
 impl Shared {
     pub fn new(echo: bool) -> Arc<Self> {
         Arc::new(Self {
+            config: Mutex::new(None),
             #[cfg(test)]
             test_transfer: crate::test_support::TransferSettings::default(),
             stop: AtomicBool::new(false),
@@ -378,7 +408,7 @@ impl Shared {
     }
 
     fn device_off(&self, id: &str, pref: Pref) -> bool {
-        if matches!(pref, Pref::RelayIn | Pref::MicIn) || id.is_empty() {
+        if id.is_empty() {
             return self.apply_remote_pref(pref, false);
         }
         let base = self.device_base(id);
@@ -389,18 +419,18 @@ impl Shared {
     }
 
     fn device_on(&self, id: &str, pref: Pref) -> bool {
-        if matches!(pref, Pref::RelayIn | Pref::MicIn) || id.is_empty() {
-            if !id.is_empty() {
-                let feat = if pref == Pref::RelayIn {
-                    Feat::Audio
-                } else {
-                    Feat::Mic
-                };
-                self.set_target(feat, id);
-            }
+        if id.is_empty() {
             self.apply_pref(pref, true);
             self.in_prefs.lock().unwrap().push((pref, true));
             return true;
+        }
+        if matches!(pref, Pref::RelayIn | Pref::MicIn) {
+            let feat = if pref == Pref::RelayIn {
+                Feat::Audio
+            } else {
+                Feat::Mic
+            };
+            self.set_target(feat, id);
         }
         let base = self.device_base(id);
         let mut map = self.device_perms.lock().unwrap();
@@ -476,16 +506,59 @@ impl Shared {
             .or(links.first())
         {
             None => State::Waiting,
-            Some(l) => State::Connected {
-                peer: l.name.clone(),
-                control: links
-                    .iter()
-                    .find(|o| o.session == owner)
-                    .map_or(Control::Local, |o| o.control),
-            },
+            Some(l) => {
+                self.primary.store(l.session, Ordering::Relaxed);
+                *self.peer_prefs.lock().unwrap() = l.prefs;
+                *self.peer_version.lock().unwrap() = l.version.clone();
+                State::Connected {
+                    peer: l.name.clone(),
+                    control: links
+                        .iter()
+                        .find(|o| o.session == owner)
+                        .map_or(Control::Local, |o| o.control),
+                }
+            }
         };
         drop(links);
         self.set(st);
+    }
+
+    pub fn primary_link(&self) -> Option<Link> {
+        let links = self.links.lock().unwrap();
+        links
+            .iter()
+            .find(|l| l.session == self.primary.load(Ordering::Relaxed))
+            .or(links.first())
+            .cloned()
+    }
+
+    fn add_link(&self, link: Link) -> io::Result<(Side, String)> {
+        let cfg = self.config.lock().unwrap().clone();
+        let mut links = self.links.lock().unwrap();
+        if !link.id.is_empty() && links.iter().any(|existing| existing.id == link.id) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "bu cihaz zaten bağlı",
+            ));
+        }
+        let session = link.session;
+        links.push(link);
+        arrange_links(&mut links, cfg.as_ref());
+        let link = links.iter().find(|link| link.session == session).unwrap();
+        Ok((link.side, link.parent.clone()))
+    }
+
+    pub fn apply_connection_settings(&self, cfg: &Config) {
+        *self.perms.lock().unwrap() = Perms::from_cfg(cfg);
+        self.want[0].store(cfg.relay_in, Ordering::Relaxed);
+        self.want[1].store(cfg.mic_in, Ordering::Relaxed);
+        *self.src.lock().unwrap() = [cfg.relay_src.clone(), cfg.mic_src.clone()];
+        self.latency.store(cfg.relay_latency, Ordering::Relaxed);
+        self.carry_files.store(cfg.carry_files, Ordering::Relaxed);
+        self.share_text.store(cfg.share_text, Ordering::Relaxed);
+        self.remote_prefs
+            .store(cfg.allow_remote_prefs, Ordering::Relaxed);
+        *self.screen_opts.lock().unwrap() = cfg.screen;
     }
 
     pub fn target(&self, feat: Feat) -> String {
@@ -527,6 +600,10 @@ impl Shared {
 
     fn local_prefs_for(&self, id: &str, session: u64) -> u16 {
         let mut bits = self.prefs_with(self.perms_for(id), self.shares_text(id));
+        if let Some(saved) = self.device_perms.lock().unwrap().get(id) {
+            let mask = Pref::RelayIn.bit() | Pref::MicIn.bit();
+            bits = (bits & !mask) | (saved & mask);
+        }
         for (feat, pref) in [(Feat::Audio, Pref::RelayIn), (Feat::Mic, Pref::MicIn)] {
             if !self.target_is(feat, id, session) {
                 bits &= !pref.bit();
@@ -599,6 +676,7 @@ impl Shared {
 }
 
 pub fn run(cfg: Config, sh: Arc<Shared>) {
+    *sh.config.lock().unwrap() = Some(cfg.clone());
     sh.want[0].store(cfg.relay_in, Ordering::Relaxed);
     sh.want[1].store(cfg.mic_in, Ordering::Relaxed);
     *sh.src.lock().unwrap() = [cfg.relay_src.clone(), cfg.mic_src.clone()];
@@ -783,12 +861,12 @@ fn main_loop(cfg: &Config, sh: &Arc<Shared>) -> io::Result<()> {
         }
         if last_try.elapsed() > Duration::from_secs(2) {
             last_try = Instant::now();
-            let linked: Vec<(String, String, Side, String)> = sh
+            let linked: Vec<(String, String)> = sh
                 .links
                 .lock()
                 .unwrap()
                 .iter()
-                .map(|l| (l.id.clone(), l.ip.clone(), l.side, l.parent.clone()))
+                .map(|l| (l.id.clone(), l.ip.clone()))
                 .collect();
             let mut target: Option<(String, String, String, Side)> = None;
             if manual {
@@ -804,13 +882,10 @@ fn main_loop(cfg: &Config, sh: &Arc<Shared>) -> io::Result<()> {
             if target.is_none() {
                 for (ip, name, port, id) in discover::all() {
                     let side = cfg.side_of(&id).unwrap_or(cfg.side);
-                    let parent = cfg.parent_of(&id).unwrap_or("");
                     if discover::self_id() >= id.as_str()
                         || sh.policy.lock().unwrap().blocked.contains(&id)
                         || denied.get(&ip).is_some_and(|t| Instant::now() <= *t)
-                        || linked
-                            .iter()
-                            .any(|(i, a, s, p)| *i == id || *a == ip || (*s == side && p == parent))
+                        || linked.iter().any(|(i, a)| *i == id || *a == ip)
                     {
                         continue;
                     }
@@ -1112,6 +1187,7 @@ fn end_session(sh: &Shared, inj: &Mutex<Injector>, r: io::Result<()>, session: u
     SLOT.lock().unwrap().retain(|(id, _)| *id != session);
     let _ = INPUT_TO.compare_exchange(session, 0, Ordering::AcqRel, Ordering::Relaxed);
     let gone: Vec<Link> = {
+        let cfg = sh.config.lock().unwrap().clone();
         let mut links = sh.links.lock().unwrap();
         let gone = links
             .iter()
@@ -1119,6 +1195,7 @@ fn end_session(sh: &Shared, inj: &Mutex<Injector>, r: io::Result<()>, session: u
             .cloned()
             .collect();
         links.retain(|l| l.session != session);
+        arrange_links(&mut links, cfg.as_ref());
         gone
     };
     for l in &gone {
@@ -1350,7 +1427,36 @@ fn run_session(
         }
     };
     let (pw, ph) = (pw.max(1), ph.max(1));
-    let parent = cfg.parent_of(&pid).unwrap_or("").to_string();
+    let parent = cfg
+        .parent_of(&pid)
+        .filter(|parent| {
+            parent.is_empty() || sh.links.lock().unwrap().iter().any(|l| l.id == *parent)
+        })
+        .unwrap_or("")
+        .to_string();
+    if !pid.is_empty() {
+        let peer_cfg = sh
+            .config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap_or(cfg)
+            .for_peer(&pid);
+        let bits = flows::bits(&peer_cfg)
+            | if peer_cfg.allow_screen_out {
+                flows::SCREEN_OUT
+            } else {
+                0
+            };
+        sh.device_perms
+            .lock()
+            .unwrap()
+            .entry(pid.clone())
+            .or_insert(bits);
+        if sh.links.lock().unwrap().is_empty() {
+            sh.apply_connection_settings(&peer_cfg);
+        }
+    }
     let hash = s.hash;
     let screen_ok = pflags & flows::SUPPORTS_SCREEN != 0 && pflags != 0xFF;
     let screen2_ok = pflags & flows::SUPPORTS_SCREEN2 != 0 && pflags != 0xFF;
@@ -1369,12 +1475,8 @@ fn run_session(
     } else if primary {
         *sh.peer_version.lock().unwrap() = Some(String::new());
     }
-    sh.log(format!(
-        "{peer} bağlandı. Ekranın {} tarafında. Acil dönüş: Ctrl+Alt+Home",
-        eff.tr()
-    ));
     let peer_ip = s.peer_addr()?.ip().to_string();
-    sh.links.lock().unwrap().push(Link {
+    let (eff, parent) = sh.add_link(Link {
         session,
         id: pid.clone(),
         name: peer.clone(),
@@ -1386,7 +1488,11 @@ fn run_session(
         sending: [false; 2],
         screen_out: false,
         version: (!knows_version).then(String::new),
-    });
+    })?;
+    sh.log(format!(
+        "{peer} bağlandı. Ekranın {} tarafında. Acil dönüş: Ctrl+Alt+Home",
+        eff.tr()
+    ));
     let set = |c: Control| sh.set_control(session, c);
     set(Control::Local);
 
@@ -1431,26 +1537,20 @@ fn run_session(
     let mut metrics_requested = false;
     let mut metrics_subscribed = None;
     let mut metrics_sent = Instant::now() - Duration::from_secs(2);
-    let hit = |nx: i32, ny: i32| beyond(nx, ny, w, h) == Some(eff);
-    let along = |x: i32, y: i32| edge_along(x, y, eff, w, h);
-    let place = |pos: u16, inset: i32| edge_point(pos, eff, inset, w, h);
     let flash = |edge: Side, x: i32, y: i32| {
         platform::edge_flash(x, y, matches!(edge, Side::Left | Side::Right), w, h)
+    };
+    let link_key = if pid.is_empty() {
+        format!("#{session}")
+    } else {
+        pid.clone()
     };
     let child_on = |edge: Side| -> Option<u64> {
         sh.links
             .lock()
             .unwrap()
             .iter()
-            .find(|l| l.parent == pid && l.side == edge && !pid.is_empty())
-            .map(|l| l.session)
-    };
-    let parent_session = || -> Option<u64> {
-        sh.links
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|l| l.id == parent && !parent.is_empty())
+            .find(|l| l.parent == link_key && l.side == edge)
             .map(|l| l.session)
     };
     let mut mirror = (pw / 2, ph / 2);
@@ -1475,6 +1575,27 @@ fn run_session(
     let mut prefs_sent: Option<u16> = None;
     let mut screen_control_allowed = sh.perms_for(&pid).screen_control;
     while !sh.stopping() {
+        // A neighbour can disconnect while this session stays alive. Follow
+        // the resolved live layout rather than the initial saved coordinates.
+        let (eff, parent) = sh
+            .links
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|link| link.session == session)
+            .map(|link| (link.side, link.parent.clone()))
+            .unwrap_or((eff, parent.clone()));
+        let hit = |nx: i32, ny: i32| beyond(nx, ny, w, h) == Some(eff);
+        let along = |x: i32, y: i32| edge_along(x, y, eff, w, h);
+        let place = |pos: u16, inset: i32| edge_point(pos, eff, inset, w, h);
+        let parent_session = || -> Option<u64> {
+            sh.links
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|link| link.key() == parent && !parent.is_empty())
+                .map(|link| link.session)
+        };
         let screen_mine = sh.target_is(Feat::Screen, &pid, session);
         let usb_mine = usb_ok && sh.target_is(Feat::Usb, &pid, session);
         let files_mine = sh.target_is(Feat::Files, &pid, session);
@@ -1508,9 +1629,9 @@ fn run_session(
         }
         let mine_out = |sh: &Shared| -> Vec<(Pref, bool)> {
             let mut out = sh.out_prefs.lock().unwrap();
-            let (here, rest): (Vec<_>, Vec<_>) = out
-                .drain(..)
-                .partition(|(id, ..)| *id == pid || (id.is_empty() && primary));
+            let (here, rest): (Vec<_>, Vec<_>) = out.drain(..).partition(|(id, ..)| {
+                *id == pid || (id.is_empty() && sh.primary.load(Ordering::Relaxed) == session)
+            });
             *out = rest;
             here.into_iter().map(|(_, p, on)| (p, on)).collect()
         };
@@ -1588,7 +1709,9 @@ fn run_session(
         screen_control_allowed = local_perms.screen_control;
         for i in 0..2 {
             let feat = if i == 0 { Feat::Audio } else { Feat::Mic };
-            let want = sh.target_is(feat, &pid, session) && sh.want[i].load(Ordering::Relaxed);
+            let pref = if i == 0 { Pref::RelayIn } else { Pref::MicIn };
+            let want = sh.target_is(feat, &pid, session)
+                && sh.local_prefs_for(&pid, session) & pref.bit() != 0;
             if want && !sent[i] && audio_retry[i].is_some_and(|t| Instant::now() < t) {
                 continue;
             }
@@ -1845,6 +1968,7 @@ fn run_session(
                         }
                         send_clip_text(&mut s, sh.shares_text(&pid), &mut clip_sent)?;
                         write_frame(&mut s, &Frame::Leave(along(x, y)))?;
+                        flash(eff, x, y);
                         set(mode);
                     }
                 }
@@ -1871,7 +1995,7 @@ fn run_session(
                     thread::spawn(move || crate::clip::set_text(&t));
                 }
                 Frame::Prefs(bits) => {
-                    if primary {
+                    if sh.primary.load(Ordering::Relaxed) == session {
                         *sh.peer_prefs.lock().unwrap() = Some(bits);
                     }
                     sh.update_link(session, |l| l.prefs = Some(bits));
@@ -1965,7 +2089,7 @@ fn run_session(
                     }
                 }
                 Frame::Version(v) => {
-                    if primary {
+                    if sh.primary.load(Ordering::Relaxed) == session {
                         *sh.peer_version.lock().unwrap() = Some(v.clone());
                     }
                     sh.update_link(session, |l| l.version = Some(v));
@@ -2209,6 +2333,7 @@ fn run_session(
                     }
                     Control::Local
                         if cross
+                            && parent.is_empty()
                             && sh.perms_for(&pid).control_out
                             && pflags & 1 != 0
                             && sh.claim(session) =>
@@ -2534,6 +2659,104 @@ mod tests {
     }
 
     #[test]
+    fn primary_disconnect_selects_remaining_device_and_its_preferences_by_identity() {
+        let sh = Shared::new(false);
+        link(&sh, 1, "Same name", Side::Right);
+        link(&sh, 2, "Same name", Side::Left);
+        sh.primary.store(1, Ordering::Relaxed);
+        sh.links.lock().unwrap()[1].prefs = Some(Pref::FilesIn.bit());
+        sh.links.lock().unwrap().remove(0);
+        sh.refresh_state();
+        assert_eq!(sh.primary_link().unwrap().id, "id2");
+        assert!(sh.serves(Feat::Audio, "id2"));
+        assert_eq!(*sh.peer_prefs.lock().unwrap(), Some(Pref::FilesIn.bit()));
+    }
+
+    #[test]
+    fn colliding_live_pcs_form_a_pointer_route_and_restore_saved_positions_after_disconnect() {
+        let sh = Shared::new(false);
+        let mut cfg = Config::default();
+        for session in 1..=3 {
+            cfg.place(&format!("id{session}"), Side::Right, "");
+            link(&sh, session, &format!("PC {session}"), Side::Right);
+        }
+        *sh.config.lock().unwrap() = Some(cfg.clone());
+        let entries: Vec<_> = sh.links.lock().unwrap().drain(..).collect();
+        for entry in entries {
+            sh.add_link(entry).unwrap();
+        }
+        {
+            let links = sh.links.lock().unwrap();
+            assert_eq!(links[0].parent, "");
+            assert_eq!(links[1].parent, "id1");
+            assert_eq!(links[2].parent, "id2");
+        }
+        {
+            let mut links = sh.links.lock().unwrap();
+            links.remove(0);
+            arrange_links(&mut links, Some(&cfg));
+            assert_eq!(links[0].id, "id2");
+            assert_eq!(links[0].parent, "");
+            assert_eq!(links[1].parent, "id2");
+            links.remove(0);
+            arrange_links(&mut links, Some(&cfg));
+            assert_eq!(links[0].id, "id3");
+            assert_eq!(links[0].parent, "");
+        }
+        let saved = sh.config.lock().unwrap();
+        for id in ["id1", "id2", "id3"] {
+            assert_eq!(saved.as_ref().unwrap().parent_of(id), Some(""));
+            assert!(saved.as_ref().unwrap().side_of(id) == Some(Side::Right));
+        }
+    }
+
+    #[test]
+    fn concurrent_connections_reserve_distinct_live_positions() {
+        let sh = Shared::new(false);
+        for session in 1..=8 {
+            link(&sh, session, "PC", Side::Right);
+        }
+        let entries: Vec<_> = sh.links.lock().unwrap().drain(..).collect();
+        let workers: Vec<_> = entries
+            .into_iter()
+            .map(|entry| {
+                let sh = sh.clone();
+                thread::spawn(move || sh.add_link(entry).unwrap())
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let links = sh.links.lock().unwrap();
+        assert_eq!(links.len(), 8);
+        let positions: HashSet<_> = links
+            .iter()
+            .map(|link| (link.parent.clone(), link.side.to_u8()))
+            .collect();
+        assert_eq!(positions.len(), 8);
+        assert_eq!(
+            links.iter().filter(|link| link.parent.is_empty()).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn audio_and_microphone_choices_are_independent_for_each_pc() {
+        let sh = Shared::new(false);
+        link(&sh, 1, "A", Side::Right);
+        link(&sh, 2, "B", Side::Left);
+        sh.primary.store(1, Ordering::Relaxed);
+        assert!(sh.remote_set("id1", Pref::RelayIn, true));
+        assert_eq!(sh.local_prefs_for("id2", 2) & Pref::RelayIn.bit(), 0);
+        assert_ne!(sh.local_prefs_for("id1", 1) & Pref::RelayIn.bit(), 0);
+        assert!(sh.remote_set("id2", Pref::MicIn, true));
+        assert_eq!(sh.local_prefs_for("id1", 1) & Pref::MicIn.bit(), 0);
+        assert_ne!(sh.local_prefs_for("id2", 2) & Pref::MicIn.bit(), 0);
+        assert!(sh.remote_set("id1", Pref::RelayIn, false));
+        assert_ne!(sh.local_prefs_for("id2", 2) & Pref::MicIn.bit(), 0);
+    }
+
+    #[test]
     fn ayni_anda_tek_oturum_kontrolu_alir() {
         let sh = Shared::new(false);
         link(&sh, 1, "A", Side::Right);
@@ -2599,9 +2822,9 @@ mod tests {
         assert!(sh.remote_set("id1", Pref::FilesIn, true));
         assert!(sh.perms_for("id1").files_in);
         assert!(sh.remote_set("id1", Pref::RelayIn, true));
-        assert!(sh.want[0].load(Ordering::Relaxed));
+        assert_ne!(sh.local_prefs_for("id1", 1) & Pref::RelayIn.bit(), 0);
         assert_eq!(sh.target(Feat::Audio), "id1");
-        assert!(sh.in_prefs.lock().unwrap().contains(&(Pref::RelayIn, true)));
+        assert!(sh.in_prefs.lock().unwrap().is_empty());
     }
 
     #[test]

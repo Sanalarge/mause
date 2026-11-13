@@ -26,6 +26,7 @@ mod flows;
 mod gui;
 mod hardware;
 mod keymap;
+mod layout;
 mod logo;
 mod metrics;
 mod net;

@@ -142,6 +142,10 @@ fn modifier_mask(mac: u16) -> Option<u64> {
 
 pub fn init() {}
 
+pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
+    super::macos_flash::show(x, y, w, h);
+}
+
 pub struct Injector {
     down: HashSet<u16>,
     flags: CGEventFlags,

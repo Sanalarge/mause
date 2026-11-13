@@ -113,15 +113,15 @@ pub mod ev {
 
 /// Fare başka PC'ye geçerken (ya da bu PC'ye gelirken) geçiş noktasında kısa
 /// süre yanıp sönen ince bir şerit gösterir. `vertical` sol/sağ kenar demektir.
-/// Desteklenmeyen ortamlarda (Wayland, macOS) hiçbir şey yapmaz.
+/// Pencere odak almaz ve giriş olaylarını engellemez.
 pub fn edge_flash(x: i32, y: i32, vertical: bool, w: i32, h: i32) {
     if cfg!(test) {
         return;
     }
     let (rx, ry, rw, rh) = flash_rect(x, y, vertical, w, h);
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     std::thread::spawn(move || flash_window(rx, ry, rw, rh));
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     let _ = (rx, ry, rw, rh);
 }
 
@@ -156,6 +156,8 @@ mod linux;
 #[cfg(target_os = "linux")]
 mod wayland;
 #[cfg(target_os = "linux")]
+mod wayland_flash;
+#[cfg(target_os = "linux")]
 pub use linux::*;
 
 #[cfg(target_os = "windows")]
@@ -165,6 +167,8 @@ pub use windows::*;
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_flash;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
