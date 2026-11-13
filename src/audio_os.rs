@@ -302,10 +302,13 @@ impl Jitter {
     }
 
     fn pop(&mut self) -> [f32; 2] {
-        if !self.playing && self.frames.len() >= self.target {
+        if !self.playing {
+            if self.frames.len() < self.target {
+                return [0.0; 2];
+            }
             self.playing = true;
         }
-        match self.frames.pop_front().filter(|_| self.playing) {
+        match self.frames.pop_front() {
             Some(f) => f,
             None => {
                 self.playing = false;
@@ -413,6 +416,30 @@ mod tests {
             out.windows(2)
                 .all(|w| w[1][0] >= w[0][0] - 1e-6 && w[1][0] - w[0][0] < 1e-3)
         );
+    }
+
+    #[test]
+    fn jitter_preserves_samples_until_playback_and_after_underrun() {
+        let mut j = Jitter {
+            frames: VecDeque::new(),
+            target: 4,
+            playing: false,
+        };
+        for _ in 0..2 {
+            for value in 1..4 {
+                j.push(&[[value as f32; 2]]);
+                for _ in 0..8 {
+                    assert_eq!(j.pop(), [0.0; 2]);
+                }
+                assert_eq!(j.frames.len(), value);
+            }
+            j.push(&[[4.0; 2]]);
+            for value in 1..=4 {
+                assert_eq!(j.pop(), [value as f32; 2]);
+            }
+            assert_eq!(j.pop(), [0.0; 2]);
+            assert!(!j.playing);
+        }
     }
 
     #[test]
