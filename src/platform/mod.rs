@@ -111,9 +111,6 @@ pub mod ev {
     pub const BTN_EXTRA: u16 = 0x114;
 }
 
-/// Fare başka PC'ye geçerken (ya da bu PC'ye gelirken) geçiş noktasında kısa
-/// süre yanıp sönen ince bir şerit gösterir. `vertical` sol/sağ kenar demektir.
-/// Pencere odak almaz ve giriş olaylarını engellemez.
 pub fn edge_flash(x: i32, y: i32, vertical: bool, w: i32, h: i32) {
     if cfg!(test) {
         return;
@@ -125,7 +122,6 @@ pub fn edge_flash(x: i32, y: i32, vertical: bool, w: i32, h: i32) {
     let _ = (rx, ry, rw, rh);
 }
 
-/// Parlama şeridinin dikdörtgeni: kenara yapışık, geçiş noktasında ortalanmış.
 pub fn flash_rect(x: i32, y: i32, vertical: bool, w: i32, h: i32) -> (i32, i32, i32, i32) {
     const THICK: i32 = 6;
     let w = w.max(THICK);
@@ -143,7 +139,6 @@ pub fn flash_rect(x: i32, y: i32, vertical: bool, w: i32, h: i32) -> (i32, i32, 
     }
 }
 
-/// Parlama renkleri (0xRRGGBB): vurgu mavisi ile açık tonu arasında titrer.
 #[allow(dead_code)]
 pub const FLASH_COLORS: [u32; 2] = [0x3D8BFF, 0xBFDBFF];
 #[allow(dead_code)]

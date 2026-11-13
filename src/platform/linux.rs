@@ -805,8 +805,6 @@ pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
     if made.is_err() {
         return;
     }
-    // XWayland fallback for compositors without layer-shell (e.g. GNOME).
-    // An empty input shape lets the pointer pass through the strip.
     let _ = x11rb::protocol::shape::ConnectionExt::shape_rectangles(
         &conn,
         x11rb::protocol::shape::SO::SET,
@@ -853,8 +851,6 @@ pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
     let _ = conn.flush();
 }
 
-/// Ekran koordinat birimi başına mantıksal piksel oranı. KDE (kscreen) ve
-/// Wayland zaten mantıksal boyut verir; X11'de Xft.dpi / GDK_SCALE okunur.
 pub fn ui_scale() -> f32 {
     static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
     *SCALE.get_or_init(|| {

@@ -1,4 +1,3 @@
-//! Control traffic and keepalives run independently of device initialization.
 use crate::net::{self, Frame, Secure};
 use std::io::{self, Write};
 #[cfg(not(test))]
@@ -161,7 +160,6 @@ fn start_with(
     Ok(Writer { queue, state })
 }
 
-/// Only connection lifecycle events are persisted. Disk writes never block a session.
 pub fn record(message: String) {
     #[cfg(test)]
     {
@@ -251,7 +249,6 @@ mod tests {
             &Frame::Version("queued during device initialization".into()),
         )
         .unwrap();
-        // Neither application's control queue is consumed for longer than the watchdog interval.
         std::thread::sleep(Duration::from_millis(1200));
         assert!(!a.state.stopped.load(Ordering::Acquire));
         assert!(!b.state.stopped.load(Ordering::Acquire));

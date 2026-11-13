@@ -56,8 +56,6 @@ impl Link {
 }
 
 fn arrange_links(links: &mut [Link], cfg: Option<&Config>) {
-    // Connection order keeps existing devices closest to their saved position,
-    // and moves later arrivals beyond occupied cells.
     let placements = crate::layout::resolve(
         links
             .iter()
@@ -1274,7 +1272,6 @@ fn beyond(x: i32, y: i32, w: i32, h: i32) -> Option<Side> {
     }
 }
 
-/// Gerçek imleç, geçiş yapılacak kenara dayanmış mı (2 piksel tolerans).
 fn at_edge(x: i32, y: i32, edge: Side, w: i32, h: i32) -> bool {
     match edge {
         Side::Left => x <= 1,
@@ -1527,8 +1524,6 @@ fn run_session(
     let mut info_sent = String::new();
     let mut usb_server: Option<usb::Tunnel> = None;
     let mut audio_retry: [Option<Instant>; 2] = [None, None];
-    // Ses isteği gönderildiği halde paket gelmiyorsa (istek karşıda henüz izin/
-    // cihaz hazır değilken reddedildi, gönderici açılamadı vb.) isteği yineler.
     let mut audio_asked: [Option<Instant>; 2] = [None, None];
     let mut echo_warned = false;
     let mut screen_retry: Option<Instant> = None;
@@ -1575,8 +1570,6 @@ fn run_session(
     let mut prefs_sent: Option<u16> = None;
     let mut screen_control_allowed = sh.perms_for(&pid).screen_control;
     while !sh.stopping() {
-        // A neighbour can disconnect while this session stays alive. Follow
-        // the resolved live layout rather than the initial saved coordinates.
         let (eff, parent) = sh
             .links
             .lock()
@@ -1748,10 +1741,6 @@ fn run_session(
                     audio_retry[i] = None;
                 }
                 if want && i == 0 && send[0].is_some() {
-                    // İki PC birbirine aynı anda sistem sesini gönderirse her biri
-                    // diğerinin sesini yeniden yakalayıp geri yollar: kendini besleyen
-                    // uğultu/parazit oluşur. Tek yön seçilir: bağlantıyı başlatan PC
-                    // öncelikli; diğeri karşı onu dinlerken istek göndermez.
                     if !initiator {
                         if !echo_warned {
                             echo_warned = true;
@@ -2178,7 +2167,6 @@ fn run_session(
                 Frame::AudioReq(kind, on) if kind < 2 => {
                     let dev = sh.src.lock().unwrap()[kind as usize].clone();
                     if kind == 0 && on && recv[0].take().is_some() {
-                        // Karşı bizi dinlemek istiyor ve öncelik onda: bizim dinlememizi bırak.
                         sent[0] = false;
                         write_frame(&mut s, &Frame::AudioReq(0, false))?;
                         sh.log(ECHO_NOTE);
@@ -2268,10 +2256,6 @@ fn run_session(
                     gain.observe(dx, dy, platform::cursor_pos);
                 }
                 if cross && mode == Control::Local {
-                    // Konum ham fare hareketinden tahmin edilir; işletim sisteminin
-                    // ivmelenmesi yüzünden gerçek imleçten kayabilir ve fare ekranın
-                    // ortasındayken bile "kenara geldi" sanılırdı. Gerçek imleç
-                    // okunabiliyorsa geçişi ona göre onayla ve tahmini düzelt.
                     if let Some((rx, ry)) = platform::cursor_pos() {
                         if !at_edge(rx, ry, eff, w, h) {
                             cross = false;

@@ -225,8 +225,6 @@ impl Config {
         if self.ancestry(parent).iter().any(|a| a == id) {
             return;
         }
-        // Different PCs may use the same edge at different times. Keep each
-        // device's saved position; only the live layout needs unique cells.
         self.placed.retain(|(i, ..)| i != id);
         self.placed.push((id.to_string(), side, parent.to_string()));
     }
@@ -478,8 +476,6 @@ impl Config {
     }
 
     fn apply_peer_settings(&mut self, settings: &str) {
-        // Profiles contain connection preferences only, never identity, pairing
-        // secrets, trust decisions, theme, or another device's layout.
         let text = settings
             .lines()
             .filter(|line| {

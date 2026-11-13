@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-// 24807 is reserved for the camera stream.
 pub const PORT: u16 = 24808;
 pub const LEGACY_PORT: u16 = 24807;
 const USBIP_PORT: u16 = 3240;
@@ -378,7 +377,6 @@ mod os {
     }
 
     pub fn local_addr() -> SocketAddr {
-        // usbipd binds 3240 on all addresses, including loopback.
         SocketAddr::from(([127, 0, 0, 1], 0))
     }
 }

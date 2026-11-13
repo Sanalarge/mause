@@ -18,9 +18,6 @@ pub fn step(cell: (i32, i32), side: Side) -> (i32, i32) {
     }
 }
 
-/// Keep the first device in a cell, and append collisions beyond it. Resolve
-/// explicit parents before their children, regardless of configuration order.
-/// Missing parents become direct neighbours for this connection only.
 pub fn resolve(mut pending: Vec<Placement>) -> Vec<Placement> {
     let keys: std::collections::HashSet<_> = pending.iter().map(|p| p.key.clone()).collect();
     for placement in &mut pending {
@@ -33,7 +30,6 @@ pub fn resolve(mut pending: Vec<Placement>) -> Vec<Placement> {
     let mut resolved = Vec::new();
     while !pending.is_empty() {
         let index = pending.iter().position(|p| cells.contains_key(&p.parent));
-        // A saved cycle must not leave devices invisible or trap the resolver.
         let index = index.unwrap_or_else(|| {
             pending[0].parent.clear();
             0
@@ -44,8 +40,6 @@ pub fn resolve(mut pending: Vec<Placement>) -> Vec<Placement> {
             let next = step(at, placement.side);
             match occupied.get(&next) {
                 Some(key) if key.is_empty() => {
-                    // The local PC is never a displaced device. Continue away
-                    // from it rather than creating a link through its back edge.
                     placement.side = placement.side.opposite();
                 }
                 Some(key) => {

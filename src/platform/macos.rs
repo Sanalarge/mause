@@ -762,7 +762,6 @@ mod tests {
     }
 }
 
-/// macOS hareketleri zaten mantıksal "point" biriminde: ölçek 1.
 pub fn ui_scale() -> f32 {
     1.0
 }

@@ -27,7 +27,6 @@ try {
         $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $package $file)
         if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notlike '*CN=SignPath Foundation,*') { throw "Invalid driver signature: $file" }
     }
-    # This is the upstream driver's configuration location; preserve existing settings.
     $settings = 'C:\VirtualDisplayDriver'
     New-Item -ItemType Directory -Path $settings -Force | Out-Null
     $settingsFile = Join-Path $settings 'vdd_settings.xml'

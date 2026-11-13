@@ -96,8 +96,6 @@ impl Gain {
             .map_or_else(|| fallback(index), |i| self.table[i])
     }
 
-    /// Gönderilen hareketi ölçekten bağımsız (mantıksal) piksele çevirir:
-    /// yerel ekranın ölçeğine bölünür, karşı taraf kendi ölçeğiyle çarpar.
     pub fn set_local_scale(&mut self, scale: f32) {
         self.out_scale = 1.0 / scale.clamp(0.5, 4.0);
     }
@@ -146,16 +144,11 @@ impl Gain {
     }
 }
 
-/// İmleç okunamayan ortamlarda (Wayland) öğrenme yapılamaz; ham sayımı olduğu
-/// gibi göndermek hızlı harekette çok yavaş, yavaşta fazla hassas hissettirir.
-/// Masaüstü varsayılanlarına yakın yumuşak bir ivme eğrisi kullanılır.
 fn fallback(index: usize) -> f32 {
     const CURVE: [f32; BUCKETS] = [1.0, 1.0, 1.15, 1.4, 1.75, 2.1, 2.4, 2.6];
     CURVE[index]
 }
 
-/// Uzaktan gelen mantıksal hareketi bu ekranın birimine çevirir; kesirler
-/// kaybolmasın diye kalan biriktirilir.
 pub struct Incoming {
     scale: f32,
     remainder: (f32, f32),
@@ -247,7 +240,6 @@ mod tests {
 
     #[test]
     fn olcek_farki_hizi_esitler() {
-        // 4K %200 ekrandan gelen 10 fiziksel piksel = 5 mantıksal; 1080p %100'de 5 piksel.
         let mut gain = Gain::new();
         gain.learn(0, 1.0);
         gain.set_local_scale(2.0);

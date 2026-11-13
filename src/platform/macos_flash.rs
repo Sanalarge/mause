@@ -1,4 +1,3 @@
-//! AppKit windows must be created and updated on the application's main queue.
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly};
@@ -24,7 +23,6 @@ pub(super) fn show(x: i32, y: i32, w: i32, h: i32) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
-        // Quartz uses a top-left origin; AppKit uses the primary screen's bottom-left.
         let screens = NSScreen::screens(mtm);
         let Some(primary) = screens.firstObject() else {
             return;
@@ -48,7 +46,6 @@ pub(super) fn show(x: i32, y: i32, w: i32, h: i32) {
         window.setHidesOnDeactivate(false);
         window.setHasShadow(false);
         window.setOpaque(false);
-        // Above menus, including when a peer controls a fullscreen application.
         window.setLevel(102);
         window.setCollectionBehavior(
             NSWindowCollectionBehavior::CanJoinAllSpaces

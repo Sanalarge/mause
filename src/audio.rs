@@ -147,9 +147,6 @@ impl Drop for Handle {
     }
 }
 
-/// Göndericinin ilk paket sayacı. Saatten (mikrosaniye) türetilir; böylece aynı
-/// oturumda gönderici yeniden başlatılsa bile sayaç hep ileri gider: alıcı yeni
-/// paketleri "eski" sanıp atmaz ve aynı anahtarla nonce tekrar kullanılmaz.
 fn first_counter() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

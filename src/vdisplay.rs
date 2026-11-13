@@ -1,4 +1,3 @@
-//! Windows virtual display lifecycle. Only the signed MttVDD adapter is changed.
 use std::io;
 use std::mem::size_of;
 use std::ptr::{null, null_mut};

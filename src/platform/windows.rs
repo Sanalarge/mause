@@ -558,7 +558,6 @@ pub fn screen_capture_begin() -> bool {
 }
 
 pub fn screen_capture_begin_virtual(_: (u16, u16)) -> bool {
-    // The sender thread activates the display and reports detailed errors to the viewer.
     true
 }
 
@@ -816,7 +815,6 @@ pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
     }
 }
 
-/// Hareket birimi (fiziksel piksel) başına mantıksal piksel oranı: %150 ölçekte 1.5.
 pub fn ui_scale() -> f32 {
     let dpi = unsafe { windows_sys::Win32::UI::HiDpi::GetDpiForSystem() };
     if dpi == 0 {

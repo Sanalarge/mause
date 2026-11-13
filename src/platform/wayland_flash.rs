@@ -1,4 +1,3 @@
-//! A short-lived, input-transparent layer-shell surface, above fullscreen windows.
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::time::Duration;
@@ -78,7 +77,6 @@ pub(super) fn show(x: i32, y: i32, w: i32, h: i32) -> Result<(), Box<dyn std::er
     layer.set_anchor(Anchor::Top | Anchor::Left);
     layer.set_margin(top, 0, 0, left);
     layer.set_size(w as u32, h as u32);
-    // Do not reserve desktop space, and ignore panel exclusive zones.
     layer.set_exclusive_zone(-1);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     surface.commit();
@@ -86,7 +84,6 @@ pub(super) fn show(x: i32, y: i32, w: i32, h: i32) -> Result<(), Box<dyn std::er
     if !state.configured || state.closed {
         return Err("overlay not configured".into());
     }
-    // Separate immutable buffers avoid writing pixels still owned by the compositor.
     let mut file = tempfile::tempfile()?;
     for color in super::FLASH_COLORS {
         let pixel = (0xFF00_0000 | color).to_ne_bytes();

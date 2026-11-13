@@ -1,4 +1,3 @@
-//! Optional aggregate performance data; no process, file, or interface names leave this PC.
 use std::sync::Weak;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
