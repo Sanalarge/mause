@@ -95,7 +95,6 @@ enum Page {
     Files,
     Usb,
     Settings,
-    Log,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -103,14 +102,16 @@ enum SettingsPage {
     General,
     Connection,
     Sharing,
+    Log,
     About,
 }
 
 impl SettingsPage {
-    const ALL: [SettingsPage; 4] = [
+    const ALL: [SettingsPage; 5] = [
         SettingsPage::General,
         SettingsPage::Connection,
         SettingsPage::Sharing,
+        SettingsPage::Log,
         SettingsPage::About,
     ];
 
@@ -119,6 +120,7 @@ impl SettingsPage {
             SettingsPage::General => "Genel",
             SettingsPage::Connection => "Bağlantı ve güvenlik",
             SettingsPage::Sharing => "Paylaşım",
+            SettingsPage::Log => "Günlük",
             SettingsPage::About => "Hakkında",
         }
     }
@@ -128,19 +130,19 @@ impl SettingsPage {
             SettingsPage::General => Icon::Settings,
             SettingsPage::Connection => Icon::Shield,
             SettingsPage::Sharing => Icon::Share,
-            SettingsPage::About => Icon::Log,
+            SettingsPage::Log => Icon::Log,
+            SettingsPage::About => Icon::GitHub,
         }
     }
 }
 
 impl Page {
-    const ALL: [Page; 6] = [
+    const ALL: [Page; 5] = [
         Page::Share,
         Page::Audio,
         Page::Files,
         Page::Usb,
         Page::Settings,
-        Page::Log,
     ];
     fn title(self) -> &'static str {
         match self {
@@ -149,7 +151,6 @@ impl Page {
             Page::Files => "Dosyalar",
             Page::Usb => "USB",
             Page::Settings => "Ayarlar",
-            Page::Log => "Günlük",
         }
     }
     fn tab(self) -> &'static str {
@@ -162,7 +163,6 @@ impl Page {
             Page::Files => Icon::Files,
             Page::Usb => Icon::Usb,
             Page::Settings => Icon::Settings,
-            Page::Log => Icon::Log,
         }
     }
 }
@@ -314,11 +314,14 @@ impl App {
                 Ok("audio") => Page::Audio,
                 Ok("files") => Page::Files,
                 Ok("usb") => Page::Usb,
-                Ok("settings") => Page::Settings,
-                Ok("log") => Page::Log,
+                Ok("settings" | "log") => Page::Settings,
                 _ => Page::Share,
             },
-            settings_page: SettingsPage::General,
+            settings_page: if std::env::var("MAUSE_PAGE").as_deref() == Ok("log") {
+                SettingsPage::Log
+            } else {
+                SettingsPage::General
+            },
             logo: None,
             local: Pane::default(),
             remote: Arc::default(),
@@ -1220,6 +1223,102 @@ fn stream_controls(ui: &mut egui::Ui, id: &str, o: &mut screen::Opts) {
         ],
     );
     ui.checkbox(&mut o.cursor, "İmleç");
+}
+
+fn screen_value_picker(
+    ui: &mut egui::Ui,
+    id: &str,
+    key: &str,
+    value: &mut u16,
+    choices: &[(u16, &str)],
+) {
+    let current = choices
+        .iter()
+        .find(|(candidate, _)| candidate == value)
+        .map_or("Özel", |(_, name)| name);
+    egui::ComboBox::from_id_salt((id, key))
+        .width(220.0)
+        .selected_text(current)
+        .show_ui(ui, |ui| {
+            for (candidate, name) in choices {
+                ui.selectable_value(value, *candidate, *name);
+            }
+        });
+}
+
+fn screen_settings_controls(ui: &mut egui::Ui, id: &str, options: &mut screen::Opts) {
+    setting_row(ui, "Görüntü modu", None, 240.0, |ui| {
+        egui::ComboBox::from_id_salt((id, "display_mode"))
+            .width(220.0)
+            .selected_text(if options.extend.is_some() {
+                "Ek monitör olarak kullan"
+            } else {
+                "Mevcut ekranı izle"
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut options.extend, None, "Mevcut ekranı izle");
+                for (size, label) in [
+                    ((1920, 1080), "Ek monitör · 1920×1080"),
+                    ((2560, 1440), "Ek monitör · 2560×1440"),
+                    ((3840, 2160), "Ek monitör · 3840×2160"),
+                ] {
+                    ui.selectable_value(&mut options.extend, Some(size), label);
+                }
+            });
+    });
+    divider(ui);
+    setting_row(ui, "Çözünürlük", None, 240.0, |ui| {
+        screen_value_picker(
+            ui,
+            id,
+            "resolution",
+            &mut options.max_w,
+            &[
+                (1280, "720p"),
+                (1920, "1080p"),
+                (2560, "1440p"),
+                (0, "Tam çözünürlük"),
+            ],
+        );
+    });
+    divider(ui);
+    let mut fps = options.fps as u16;
+    setting_row(ui, "Kare hızı", None, 240.0, |ui| {
+        screen_value_picker(
+            ui,
+            id,
+            "fps",
+            &mut fps,
+            &[
+                (5, "5 kare/sn"),
+                (10, "10 kare/sn"),
+                (15, "15 kare/sn"),
+                (24, "24 kare/sn"),
+                (30, "30 kare/sn"),
+            ],
+        );
+    });
+    options.fps = fps as u8;
+    divider(ui);
+    let mut quality = options.quality as u16;
+    setting_row(ui, "Görüntü kalitesi", None, 240.0, |ui| {
+        screen_value_picker(
+            ui,
+            id,
+            "quality",
+            &mut quality,
+            &[(40, "Düşük"), (60, "Orta"), (75, "Yüksek"), (90, "En iyi")],
+        );
+    });
+    options.quality = quality as u8;
+    divider(ui);
+    toggle_row(
+        ui,
+        "Karşı bilgisayarın imlecini göster",
+        None,
+        &mut options.cursor,
+        true,
+    );
 }
 
 struct Node {
@@ -2407,7 +2506,7 @@ fn modal_header(ui: &mut egui::Ui, title: &str, macos: bool) -> egui::Response {
 
 fn tile(ui: &mut egui::Ui, palette: Palette, selected: bool, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
-        .fill(palette.inset)
+        .fill(palette.surface)
         .stroke(if selected {
             Stroke::new(1.5, palette.signal)
         } else {
@@ -2477,6 +2576,62 @@ fn notice(
             add(ui);
         });
     ui.add_space(12.0);
+}
+
+fn workflow_panel(
+    ui: &mut egui::Ui,
+    step: &str,
+    icon: Icon,
+    title: &str,
+    subtitle: &str,
+    (status, status_color): (&str, Color32),
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    let palette = Palette::of(ui);
+    egui::Frame::new()
+        .fill(palette.inset)
+        .stroke(Stroke::new(1.0, palette.rule_strong))
+        .corner_radius(18)
+        .inner_margin(Margin::same(18))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (badge, _) = ui.allocate_exact_size(Vec2::splat(44.0), Sense::hover());
+                ui.painter().rect_filled(badge, 13, palette.selected);
+                design::icon(ui.painter(), badge.center(), icon, palette.signal, 22.0);
+                ui.add_space(4.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(step)
+                                .font(design::semibold(12.0))
+                                .color(palette.signal),
+                        );
+                        ui.label(design::strong(title, 18.0));
+                    });
+                    ui.label(RichText::new(subtitle).size(13.5).color(palette.muted));
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    egui::Frame::new()
+                        .fill(palette.surface)
+                        .stroke(Stroke::new(1.0, palette.rule_strong))
+                        .corner_radius(10)
+                        .inner_margin(Margin::symmetric(12, 7))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(status)
+                                    .font(design::medium(13.0))
+                                    .color(status_color),
+                            );
+                        });
+                });
+            });
+            ui.add_space(12.0);
+            design::rule(ui);
+            ui.add_space(12.0);
+            add(ui);
+        });
 }
 
 struct Developer {
@@ -2923,7 +3078,6 @@ impl eframe::App for App {
                                             Page::Audio => self.page_audio(ui),
                                             Page::Files => self.page_files(ui, &state, hovering),
                                             Page::Usb => self.page_usb(ui, &state),
-                                            Page::Log => self.page_log(ui),
                                             Page::Settings => unreachable!(),
                                         });
                                 });
@@ -3463,8 +3617,71 @@ impl App {
 
     fn page_share(&mut self, ui: &mut egui::Ui, state: &State, running: bool) {
         self.pairing_notice(ui);
-        self.share_computers(ui, state, running);
-        self.kvm_layout(ui, state, running);
+        let palette = Palette::of(ui);
+        let live = self
+            .shared
+            .as_ref()
+            .map(|shared| shared.links.lock().unwrap().len())
+            .unwrap_or(0);
+        let paired = self.cfg.paired.len();
+        let connection_status = if live > 0 {
+            format!("{live} bağlı")
+        } else if paired > 0 {
+            format!("{paired} kayıtlı")
+        } else if running {
+            "Ağ taranıyor".to_owned()
+        } else {
+            "Bekliyor".to_owned()
+        };
+        let connection_tone = if live > 0 {
+            palette.ok
+        } else if running {
+            palette.signal
+        } else {
+            palette.muted
+        };
+        workflow_panel(
+            ui,
+            "01",
+            Icon::Link,
+            "Yeni bilgisayar ekle",
+            "Ağdaki bir bilgisayarı seçin veya IP adresini girin.",
+            (&connection_status, connection_tone),
+            |ui| self.kvm_computers(ui, state, running),
+        );
+        ui.add_space(18.0);
+        let control_status = if live > 0 {
+            "Kontrole hazır"
+        } else {
+            "Cihaz bekleniyor"
+        };
+        let control_tone = if live > 0 { palette.ok } else { palette.muted };
+        workflow_panel(
+            ui,
+            "02",
+            Icon::Screens,
+            "Bilgisayarlarımı kontrol et",
+            "Ekranları yerleştirin; imleci kenardan geçirerek kontrolü aktarın.",
+            (control_status, control_tone),
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(design::strong("Kontrol yerleşimi", LEAD));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let changed = ui
+                            .checkbox(&mut self.cfg.show_metrics, "Performansı göster")
+                            .on_hover_text(
+                                "Cihaz kartlarında işlemci, RAM, GPU, disk ve ağ kullanımını gösterir.",
+                            )
+                            .changed();
+                        if changed {
+                            self.sync_perms();
+                        }
+                    });
+                });
+                ui.add_space(12.0);
+                self.kvm_layout(ui, state, running);
+            },
+        );
     }
 
     fn performance_visible(&self, rect: egui::Rect) -> bool {
@@ -3615,9 +3832,6 @@ impl App {
     }
 
     fn kvm_layout(&mut self, ui: &mut egui::Ui, state: &State, running: bool) {
-        if ui.checkbox(&mut self.cfg.show_metrics, "Cihaz performanslarını göster").on_hover_text("İşlemci, RAM, GPU, disk ve ağ göstergeleri. Karşı PC de kendi performans paylaşımını açmalıdır.").changed() {
-            self.sync_perms();
-        }
         let palette = Palette::of(ui);
         let links: Vec<core::Link> = self
             .shared
@@ -3662,7 +3876,7 @@ impl App {
                 painter.rect(
                     canvas,
                     16,
-                    palette.inset,
+                    palette.surface,
                     Stroke::new(1.0, palette.rule_strong),
                     StrokeKind::Inside,
                 );
@@ -5571,7 +5785,7 @@ impl App {
         };
         let mut dismiss = false;
         egui::Frame::new()
-            .fill(palette.inset)
+            .fill(palette.surface)
             .stroke(Stroke::new(1.0, tone.gamma_multiply(0.55)))
             .corner_radius(14)
             .inner_margin(Margin::symmetric(18, 16))
@@ -5672,8 +5886,13 @@ impl App {
         let mut unpair: Option<String> = None;
         let mut hold: Option<String> = None;
         let mut resume: Option<String> = None;
+        let has_saved = self
+            .cfg
+            .paired
+            .iter()
+            .any(|(id, _, _)| !list.iter().any(|(_, _, _, found)| found == id));
         egui::Frame::new()
-            .fill(palette.inset)
+            .fill(palette.surface)
             .stroke(Stroke::new(1.0, palette.rule_strong))
             .corner_radius(14)
             .inner_margin(Margin::symmetric(12, 8))
@@ -5715,7 +5934,7 @@ impl App {
                 });
             });
         ui.add_space(12.0);
-        if !running || list.is_empty() {
+        if (!running || list.is_empty()) && !has_saved {
             ui.horizontal(|ui| {
                 if running {
                     ui.add(egui::Spinner::new().size(14.0).color(palette.signal));
@@ -6506,6 +6725,24 @@ impl App {
                         .lost_focus();
                 });
                 divider(ui);
+                setting_row(
+                    ui,
+                    "Otomatik bağlantı adresi",
+                    Some("Özel bir ağ adresi gerekmiyorsa boş bırakın."),
+                    170.0,
+                    |ui| {
+                        changed |= ui
+                            .add(
+                                egui::TextEdit::singleline(&mut self.cfg.addr)
+                                    .hint_text("Otomatik")
+                                    .desired_width(150.0)
+                                    .min_size(Vec2::new(0.0, 34.0))
+                                    .align(Align2::LEFT_CENTER),
+                            )
+                            .lost_focus();
+                    },
+                );
+                divider(ui);
                 setting_row(ui, "Ekran çözünürlüğü", None, 300.0, |ui| {
                     if design::key(ui, "Yeniden algıla", KeyKind::Plain, true, 0.0).clicked() {
                         if let Some((w, h)) = crate::platform::detect_screen() {
@@ -6687,6 +6924,10 @@ impl App {
             });
         }
 
+        if page == SettingsPage::Log {
+            self.page_log(ui);
+        }
+
         if page == SettingsPage::About {
             section(ui, Some("Güncelleme"), |ui| {
                 let upd = self.update.lock().unwrap().clone();
@@ -6737,71 +6978,6 @@ impl App {
                 }
             });
         }
-    }
-
-    fn share_computers(&mut self, ui: &mut egui::Ui, state: &State, running: bool) {
-        let palette = Palette::of(ui);
-        let paired = self.cfg.paired.len();
-        let names: Vec<String> = self
-            .shared
-            .as_ref()
-            .map(|sh| {
-                sh.links
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .map(|l| l.name.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let (summary, tone) = if names.len() > 1 {
-            (format!("{} ile bağlı", names.join(", ")), palette.ok)
-        } else if let State::Connected { peer, .. } = state {
-            (format!("{peer} ile bağlı"), palette.ok)
-        } else if paired == 0 && running {
-            ("Ağdaki bilgisayarlar aranıyor".to_owned(), palette.signal)
-        } else if paired == 0 {
-            ("Henüz eşleşmiş bilgisayar yok".to_owned(), palette.muted)
-        } else if paired == 1 {
-            ("1 eşleşmiş bilgisayar".to_owned(), palette.ink2)
-        } else {
-            (format!("{paired} eşleşmiş bilgisayar"), palette.ink2)
-        };
-        ui.horizontal(|ui| {
-            ui.label(design::strong("Bilgisayarlar", LEAD));
-            ui.label(RichText::new("·").size(BODY).color(palette.muted));
-            ui.label(RichText::new(summary).size(13.0).color(tone));
-        });
-        ui.add_space(4.0);
-        hint(
-            ui,
-            "IP adresiyle doğrudan bağlanın veya ağda görünen ve daha önce eşleşmiş bilgisayarları seçin.",
-        );
-        ui.add_space(14.0);
-        self.kvm_computers(ui, state, running);
-        divider(ui);
-        let mut changed = false;
-        setting_row(
-            ui,
-            "Otomatik bağlantı adresi",
-            Some("Özel bir ağ adresi gerekmiyorsa boş bırakın."),
-            170.0,
-            |ui| {
-                changed |= ui
-                    .add(
-                        egui::TextEdit::singleline(&mut self.cfg.addr)
-                            .hint_text("Otomatik")
-                            .desired_width(150.0)
-                            .min_size(Vec2::new(0.0, 34.0))
-                            .align(Align2::LEFT_CENTER),
-                    )
-                    .lost_focus();
-            },
-        );
-        if changed {
-            self.restart();
-        }
-        ui.add_space(12.0);
     }
 
     fn secret_section(&mut self, ui: &mut egui::Ui) {
@@ -6995,15 +7171,9 @@ impl App {
             }
             divider(ui);
             let mut o = self.cfg.screen;
-            setting_row(
-                ui,
-                "Karşıyı izlerken",
-                Some("İzleme penceresinin üst çubuğundan da değiştirilebilir."),
-                470.0,
-                |ui| {
-                    stream_controls(ui, "settings", &mut o);
-                },
-            );
+            ui.label(design::strong("Karşıyı izlerken", BODY));
+            ui.add_space(10.0);
+            screen_settings_controls(ui, "settings", &mut o);
             if o != self.cfg.screen {
                 self.cfg.screen = o;
                 if let Some(sh) = &self.shared {
@@ -7790,7 +7960,6 @@ mod layout_tests {
                         Page::Files => app.page_files(ui, &State::Stopped, false),
                         Page::Usb => app.page_usb(ui, &State::Stopped),
                         Page::Settings => app.page_settings(ui, &ctx),
-                        Page::Log => app.page_log(ui),
                     }
                     assert!(
                         ui.min_rect().width() <= width + 1.0,
