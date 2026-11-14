@@ -293,6 +293,7 @@ struct App {
     install_on_launch: bool,
     extend_asked: Option<String>,
     screen_go_fullscreen: bool,
+    screen_bar_rect: Option<egui::Rect>,
 }
 
 impl App {
@@ -381,6 +382,7 @@ impl App {
             install_on_launch: update::installs_on_launch(),
             extend_asked: None,
             screen_go_fullscreen: false,
+            screen_bar_rect: None,
         };
         app.restart_pending = true;
         app.start_pending_kvm();
@@ -3245,6 +3247,9 @@ fn aux_choice(
     }
 }
 
+const SCREEN_BAR_REVEAL: f32 = 4.0;
+const SCREEN_BAR_GRACE: f32 = 16.0;
+
 const PERFORMANCE_ICONS: [Icon; 5] = [
     Icon::Cpu,
     Icon::Memory,
@@ -5407,15 +5412,21 @@ impl App {
                 ui.ctx().request_repaint_after(Duration::from_millis(30));
                 let palette = Palette::of(ui);
                 let (may_control, monitors) = sh.screen_peer.lock().unwrap().clone();
-                egui::Panel::top("screen_bar")
-                    .frame(
-                        egui::Frame::new()
-                            .fill(palette.surface)
-                            .inner_margin(Margin::symmetric(12, 8)),
-                    )
-                    .show(ui, |ui| {
-                        self.screen_toolbar(ui, &sh, may_control, &monitors)
-                    });
+                let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+                if fullscreen {
+                    self.floating_screen_bar(ui, &sh, may_control, &monitors);
+                } else {
+                    self.screen_bar_rect = None;
+                    egui::Panel::top("screen_bar")
+                        .frame(
+                            egui::Frame::new()
+                                .fill(palette.surface)
+                                .inner_margin(Margin::symmetric(12, 8)),
+                        )
+                        .show(ui, |ui| {
+                            self.screen_toolbar(ui, &sh, may_control, &monitors)
+                        });
+                }
                 let note = {
                     let mut v = sh.screen.lock().unwrap();
                     if let Some(f) = v.frame.as_mut() {
@@ -5482,6 +5493,42 @@ impl App {
             self.screen_tex = None;
             self.release_remote_keys();
         }
+    }
+
+    fn floating_screen_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        sh: &Arc<Shared>,
+        may_control: bool,
+        monitors: &[String],
+    ) {
+        let ctx = ui.ctx().clone();
+        let screen = ui.max_rect();
+        let pointer = ctx.input(|i| i.pointer.latest_pos());
+        let at_top_edge = pointer.is_some_and(|p| p.y <= screen.top() + SCREEN_BAR_REVEAL);
+        let over_bar = match (pointer, self.screen_bar_rect) {
+            (Some(p), Some(bar)) => bar.expand(SCREEN_BAR_GRACE).contains(p),
+            _ => false,
+        };
+        if !(at_top_edge || over_bar || ctx.any_popup_open()) {
+            self.screen_bar_rect = None;
+            return;
+        }
+        let palette = Palette::of(ui);
+        let shown = egui::Area::new(egui::Id::unique("mause_screen_bar_overlay"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.left_top())
+            .show(&ctx, |ui| {
+                ui.set_width(screen.width());
+                egui::Frame::new()
+                    .fill(palette.surface)
+                    .inner_margin(Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        self.screen_toolbar(ui, sh, may_control, monitors);
+                    });
+            });
+        self.screen_bar_rect = Some(shown.response.rect);
     }
 
     fn screen_toolbar(
@@ -7011,6 +7058,22 @@ impl App {
             self.screen_section(ui);
         }
         if page == SettingsPage::General {
+            section(ui, Some("Ekran geçişi"), |ui| {
+                let changed = toggle_row(
+                    ui,
+                    "Kenarda bekleyerek geç",
+                    Some("Açıkken imleç kenara gelince bir duman dalgası belirir; mouse'u o yöne itmeye devam edince dalga dolar ve geçiş yapılır. Kapalıyken imleç kenara değdiği an geçer."),
+                    &mut self.cfg.edge_hold,
+                    true,
+                )
+                .changed();
+                if changed {
+                    self.cfg.save();
+                    if let Some(sh) = &self.shared {
+                        sh.edge_hold.store(self.cfg.edge_hold, Ordering::Relaxed);
+                    }
+                }
+            });
             section(ui, Some("Performans göstergeleri"), |ui| {
                 let mut changed = toggle_row(ui, "Bu PC'nin performansını bağlı cihazlarla paylaş", Some("Yalnızca toplam kullanım değerleri paylaşılır. İşlem, dosya ve ağ adresi listeleri gönderilmez."), &mut self.cfg.share_metrics, true).changed();
                 changed |= toggle_row(ui, "Cihaz kartlarında performansı göster", Some("Değerler yaklaşık iki saniyede bir güncellenir. Karşı PC paylaşımı kapatabilir."), &mut self.cfg.show_metrics, true).changed();
@@ -7882,6 +7945,7 @@ fn ui_fixture(page: Page, theme: u8) -> App {
         install_on_launch: false,
         extend_asked: None,
         screen_go_fullscreen: false,
+        screen_bar_rect: None,
     }
 }
 

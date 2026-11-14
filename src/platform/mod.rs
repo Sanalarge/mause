@@ -111,17 +111,19 @@ pub mod ev {
     pub const BTN_EXTRA: u16 = 0x114;
 }
 
+#[cfg(not(target_os = "windows"))]
 pub fn edge_flash(x: i32, y: i32, vertical: bool, w: i32, h: i32) {
     if cfg!(test) {
         return;
     }
     let (rx, ry, rw, rh) = flash_rect(x, y, vertical, w, h);
-    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     std::thread::spawn(move || flash_window(rx, ry, rw, rh));
-    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = (rx, ry, rw, rh);
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn flash_rect(x: i32, y: i32, vertical: bool, w: i32, h: i32) -> (i32, i32, i32, i32) {
     const THICK: i32 = 6;
     let w = w.max(THICK);

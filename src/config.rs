@@ -60,6 +60,7 @@ pub struct Config {
     pub auto_connect: bool,
     pub share_text: bool,
     pub share_metrics: bool,
+    pub edge_hold: bool,
     pub show_metrics: bool,
     pub metrics_mask: u8,
     pub id: String,
@@ -110,6 +111,7 @@ impl Default for Config {
             auto_connect: true,
             share_text: true,
             share_metrics: false,
+            edge_hold: false,
             show_metrics: false,
             metrics_mask: crate::metrics::ALL,
             id: random_id(),
@@ -309,6 +311,7 @@ impl Config {
                 "screen_cursor" => c.screen.cursor = v != "0",
                 "screen_h264" => c.screen.h264 = v != "0",
                 "share_metrics" => c.share_metrics = v == "1",
+                "edge_hold" => c.edge_hold = v == "1",
                 "show_metrics" => c.show_metrics = v == "1",
                 "metrics_mask" => {
                     c.metrics_mask =
@@ -425,6 +428,7 @@ impl Config {
             "allow_remote_prefs={}\n",
             self.allow_remote_prefs as u8
         ));
+        s.push_str(&format!("edge_hold={}\n", self.edge_hold as u8));
         s.push_str(&format!(
             "share_metrics={}\nshow_metrics={}\nmetrics_mask={}\n",
             self.share_metrics as u8, self.show_metrics as u8, self.metrics_mask

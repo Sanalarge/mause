@@ -1,6 +1,7 @@
 use crate::audio;
 use crate::config::{Config, Side};
 use crate::discover;
+use crate::edge_fx::Effect;
 use crate::flows::{self, Pref};
 use crate::hardware;
 use crate::net::{self, Frame, Secure, read_frame, write_frame};
@@ -278,6 +279,7 @@ pub struct Shared {
     pub peer_version: Mutex<Option<String>>,
     pub links: Mutex<Vec<Link>>,
     pub remote_prefs: AtomicBool,
+    pub edge_hold: AtomicBool,
     pub devices: Mutex<HashMap<String, DeviceInfo>>,
     pub device_cmds: Mutex<Vec<(String, u8, Vec<u8>)>>,
     pub extend_requests: Mutex<Vec<(String, bool)>>,
@@ -346,6 +348,7 @@ impl Shared {
             peer_version: Mutex::default(),
             links: Mutex::default(),
             remote_prefs: AtomicBool::new(true),
+            edge_hold: AtomicBool::new(false),
             devices: Mutex::default(),
             device_cmds: Mutex::default(),
             extend_requests: Mutex::default(),
@@ -569,6 +572,8 @@ impl Shared {
         self.share_text.store(cfg.share_text, Ordering::Relaxed);
         self.remote_prefs
             .store(cfg.allow_remote_prefs, Ordering::Relaxed);
+        self.edge_hold.store(cfg.edge_hold, Ordering::Relaxed);
+        crate::edge_fx::set_name(&cfg.name);
         *self.screen_opts.lock().unwrap() = cfg.screen;
     }
 
@@ -701,6 +706,8 @@ pub fn run(cfg: Config, sh: Arc<Shared>) {
     *sh.perms.lock().unwrap() = Perms::from_cfg(&cfg);
     sh.remote_prefs
         .store(cfg.allow_remote_prefs, Ordering::Relaxed);
+    sh.edge_hold.store(cfg.edge_hold, Ordering::Relaxed);
+    crate::edge_fx::set_name(&cfg.name);
     *sh.screen_opts.lock().unwrap() = cfg.screen;
     *sh.usb_allowed.lock().unwrap() = cfg.usb_shared.clone();
     *sh.device_perms.lock().unwrap() = cfg.device_perms.iter().cloned().collect();
@@ -1568,9 +1575,20 @@ fn run_session(
     let mut metrics_requested = false;
     let mut metrics_subscribed = None;
     let mut metrics_sent = Instant::now() - Duration::from_secs(2);
-    let flash = |edge: Side, x: i32, y: i32| {
-        platform::edge_flash(x, y, matches!(edge, Side::Left | Side::Right), w, h)
+    let effect = |kind: Effect, edge: Side, x: i32, y: i32| {
+        crate::edge_fx::show(
+            kind,
+            crate::edge_fx::Spot {
+                edge,
+                x,
+                y,
+                w,
+                h,
+                scale: platform::ui_scale(),
+            },
+        )
     };
+    let mut edge_push = crate::edge::EdgePush::default();
     let link_key = if pid.is_empty() {
         format!("#{session}")
     } else {
@@ -1969,7 +1987,7 @@ fn run_session(
                         mode = Control::Controlled;
                         (x, y) = place(yf, 0);
                         inj.lock().unwrap().warp(x, y, w, h)?;
-                        flash(eff, x, y);
+                        effect(Effect::Arrive, eff, x, y);
                         set(mode);
                     } else {
                         write_frame(&mut s, &Frame::Reclaim)?;
@@ -2007,7 +2025,7 @@ fn run_session(
                         }
                         send_clip_text(&mut s, sh.shares_text(&pid), &mut clip_sent)?;
                         write_frame(&mut s, &Frame::Leave(along(x, y)))?;
-                        flash(eff, x, y);
+                        effect(Effect::Leave, eff, x, y);
                         set(mode);
                     }
                 }
@@ -2019,7 +2037,7 @@ fn run_session(
                         platform::grab(false);
                         (x, y) = place(yf, 1);
                         inj.lock().unwrap().warp(x, y, w, h)?;
-                        flash(eff, x, y);
+                        effect(Effect::Arrive, eff, x, y);
                     }
                     set(mode);
                 }
@@ -2298,6 +2316,7 @@ fn run_session(
             }
             Msg::Dev(evs) => {
                 let (mut cross, mut strong, mut mv) = (false, false, 0i32);
+                let mut toward_edge = 0i32;
                 for &(t, c, v) in &evs {
                     if t == ev::EV_KEY {
                         if v == 1 {
@@ -2312,11 +2331,13 @@ fn run_session(
                             cross |= hit(nx, y);
                             x = nx.clamp(0, w - 1);
                             mv += v.abs();
+                            toward_edge += crate::edge::outward(eff, true, v);
                         } else if c == ev::REL_Y {
                             let ny = y + v;
                             cross |= hit(x, ny);
                             y = ny.clamp(0, h - 1);
                             mv += v.abs();
+                            toward_edge += crate::edge::outward(eff, false, v);
                         }
                     }
                 }
@@ -2332,6 +2353,19 @@ fn run_session(
                         x = rx.clamp(0, w - 1);
                         y = ry.clamp(0, h - 1);
                     }
+                }
+                let may_cross = mode == Control::Local
+                    && parent.is_empty()
+                    && sh.perms_for(&pid).control_out
+                    && pflags & 1 != 0;
+                if may_cross && cross && sh.edge_hold.load(Ordering::Relaxed) {
+                    let progress = edge_push.push(toward_edge, Instant::now());
+                    if !edge_push.done() {
+                        cross = false;
+                        effect(Effect::Hold(progress), eff, x, y);
+                    }
+                } else if !cross && edge_push.active() && !at_edge(x, y, eff, w, h) {
+                    edge_push.reset();
                 }
                 match mode {
                     Control::Remote => {
@@ -2401,7 +2435,8 @@ fn run_session(
                         let pos = along(x, y);
                         write_frame(&mut s, &Frame::Enter(pos, eff.to_u8()))?;
                         mirror = edge_point(pos, far_home, 0, pw, ph);
-                        flash(eff, x, y);
+                        edge_push.reset();
+                        effect(Effect::Leave, eff, x, y);
                         sh.log(gain.describe());
                         set(mode);
                     }

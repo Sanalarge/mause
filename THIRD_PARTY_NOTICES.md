@@ -36,6 +36,7 @@ SOFTWARE.
 
 - Poppins is distributed under the SIL Open Font License 1.1. Its license is in `assets/fonts/OFL-Poppins.txt`.
 - Phosphor Icons is distributed under the MIT License. Its license is in `assets/fonts/MIT-Phosphor.txt`.
+- Font Awesome Free 6.5.2 Brands by Fonticons, Inc. (https://fontawesome.com) is distributed under the SIL Open Font License 1.1. It provides the Windows, Apple, Linux and Android logos. Its license is in `assets/fonts/OFL-FontAwesome.txt`.
 
 ## Windows installer components
 

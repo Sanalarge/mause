@@ -22,6 +22,8 @@ mod connection;
 mod core;
 mod design;
 mod discover;
+mod edge;
+mod edge_fx;
 mod flows;
 mod gui;
 mod hardware;

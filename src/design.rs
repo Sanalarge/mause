@@ -178,6 +178,10 @@ pub fn apply(ctx: &egui::Context, theme: u8) {
     });
 }
 
+pub const POPPINS_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Poppins-SemiBold.ttf");
+pub const PHOSPHOR: &[u8] = include_bytes!("../assets/fonts/Phosphor-Regular.ttf");
+pub const BRANDS: &[u8] = include_bytes!("../assets/fonts/FontAwesome-Brands.ttf");
+
 pub fn install_fonts(ctx: &egui::Context) {
     let font = |bytes: &'static [u8]| std::sync::Arc::new(egui::FontData::from_static(bytes));
     let mut fonts = egui::FontDefinitions::default();
@@ -189,17 +193,18 @@ pub fn install_fonts(ctx: &egui::Context) {
         "poppins-medium".into(),
         font(include_bytes!("../assets/fonts/Poppins-Medium.ttf")),
     );
-    fonts.font_data.insert(
-        "poppins-semibold".into(),
-        font(include_bytes!("../assets/fonts/Poppins-SemiBold.ttf")),
-    );
-    fonts.font_data.insert(
-        "phosphor".into(),
-        font(include_bytes!("../assets/fonts/Phosphor-Regular.ttf")),
-    );
+    fonts
+        .font_data
+        .insert("poppins-semibold".into(), font(POPPINS_SEMIBOLD));
+    fonts.font_data.insert("phosphor".into(), font(PHOSPHOR));
     fonts.families.insert(
         egui::FontFamily::Name("icons".into()),
         vec!["phosphor".into()],
+    );
+    fonts.font_data.insert("brands".into(), font(BRANDS));
+    fonts.families.insert(
+        egui::FontFamily::Name("brands".into()),
+        vec!["brands".into()],
     );
     fonts
         .families
@@ -764,13 +769,29 @@ pub fn icon(painter: &egui::Painter, center: egui::Pos2, kind: Icon, color: Colo
         Icon::Restore => '\u{e1cc}',
         Icon::Close => '\u{e4f6}',
     };
+    let (glyph, family, size) = match brand_glyph(kind) {
+        Some(logo) => (logo, "brands", size * BRAND_SCALE),
+        None => (glyph, "icons", size),
+    };
     painter.text(
         center,
         egui::Align2::CENTER_CENTER,
         glyph,
-        FontId::new(size, egui::FontFamily::Name("icons".into())),
+        FontId::new(size, egui::FontFamily::Name(family.into())),
         color,
     );
+}
+
+const BRAND_SCALE: f32 = 0.9;
+
+pub fn brand_glyph(kind: Icon) -> Option<char> {
+    match kind {
+        Icon::Windows => Some('\u{f17a}'),
+        Icon::Apple => Some('\u{f179}'),
+        Icon::Linux => Some('\u{f17c}'),
+        Icon::Android => Some('\u{f17b}'),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
