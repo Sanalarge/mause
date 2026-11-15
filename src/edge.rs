@@ -2,6 +2,15 @@ use crate::config::Side;
 use std::time::{Duration, Instant};
 
 pub const PUSH_NEEDED: i32 = 180;
+pub const HOLD_FLAG: u8 = 0x80;
+
+pub fn enter_flags(edge: Side, hold: bool) -> u8 {
+    edge.to_u8() | if hold { HOLD_FLAG } else { 0 }
+}
+
+pub fn wants_hold(flags: u8) -> bool {
+    flags & HOLD_FLAG != 0
+}
 pub const PUSH_GAP: Duration = Duration::from_millis(320);
 
 pub fn outward(edge: Side, horizontal: bool, delta: i32) -> i32 {
@@ -62,6 +71,16 @@ mod tests {
         assert_eq!(outward(Side::Top, false, -5), 5);
         assert_eq!(outward(Side::Bottom, false, 9), 9);
         assert_eq!(outward(Side::Right, false, 30), 0);
+    }
+
+    #[test]
+    fn hold_choice_travels_with_the_enter_message() {
+        for edge in Side::ALL {
+            let flags = enter_flags(edge, true);
+            assert!(wants_hold(flags));
+            assert!(Side::from_u8(flags & !HOLD_FLAG) == edge);
+            assert!(!wants_hold(enter_flags(edge, false)));
+        }
     }
 
     #[test]

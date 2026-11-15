@@ -1589,6 +1589,7 @@ fn run_session(
         )
     };
     let mut edge_push = crate::edge::EdgePush::default();
+    let mut peer_hold = false;
     let link_key = if pid.is_empty() {
         format!("#{session}")
     } else {
@@ -1982,12 +1983,14 @@ fn run_session(
                     let _ = write_frame(&mut s, &Frame::Reclaim);
                     sh.log("Karşı PC bu PC'yi yönetmek istedi ama ayarlarda kapalı.");
                 }
-                Frame::Enter(yf, _) => {
+                Frame::Enter(yf, flags) => {
                     if sh.claim(session) {
                         mode = Control::Controlled;
+                        peer_hold = crate::edge::wants_hold(flags);
+                        edge_push.reset();
                         (x, y) = place(yf, 0);
                         inj.lock().unwrap().warp(x, y, w, h)?;
-                        effect(Effect::Arrive, eff, x, y);
+                        effect(Effect::Arrive { smoke: peer_hold }, eff, x, y);
                         set(mode);
                     } else {
                         write_frame(&mut s, &Frame::Reclaim)?;
@@ -2003,20 +2006,34 @@ fn run_session(
                 {
                     incoming.apply(&mut evs);
                     let mut leave = false;
+                    let mut toward_edge = 0i32;
                     for &(t, c, v) in &evs {
                         if t == ev::EV_REL {
                             if c == ev::REL_X {
                                 let nx = x + v;
                                 leave |= hit(nx, y);
                                 x = nx.clamp(0, w - 1);
+                                toward_edge += crate::edge::outward(eff, true, v);
                             } else if c == ev::REL_Y {
                                 let ny = y + v;
                                 leave |= hit(x, ny);
                                 y = ny.clamp(0, h - 1);
+                                toward_edge += crate::edge::outward(eff, false, v);
                             }
                         }
                     }
                     inj.lock().unwrap().emit_pointer(&evs, x, y, w, h)?;
+                    if leave && peer_hold {
+                        let progress = edge_push.push(toward_edge, Instant::now());
+                        if edge_push.done() {
+                            edge_push.reset();
+                        } else {
+                            leave = false;
+                            effect(Effect::Hold(progress), eff, x, y);
+                        }
+                    } else if !leave && edge_push.active() && !at_edge(x, y, eff, w, h) {
+                        edge_push.reset();
+                    }
                     if leave {
                         inj.lock().unwrap().release_all();
                         mode = Control::Local;
@@ -2025,7 +2042,9 @@ fn run_session(
                         }
                         send_clip_text(&mut s, sh.shares_text(&pid), &mut clip_sent)?;
                         write_frame(&mut s, &Frame::Leave(along(x, y)))?;
-                        effect(Effect::Leave, eff, x, y);
+                        if peer_hold {
+                            effect(Effect::Leave, eff, x, y);
+                        }
                         set(mode);
                     }
                 }
@@ -2037,7 +2056,14 @@ fn run_session(
                         platform::grab(false);
                         (x, y) = place(yf, 1);
                         inj.lock().unwrap().warp(x, y, w, h)?;
-                        effect(Effect::Arrive, eff, x, y);
+                        effect(
+                            Effect::Arrive {
+                                smoke: sh.edge_hold.load(Ordering::Relaxed),
+                            },
+                            eff,
+                            x,
+                            y,
+                        );
                     }
                     set(mode);
                 }
@@ -2288,7 +2314,13 @@ fn run_session(
             Msg::Takeover(id, pos, push) if id == session => {
                 mode = Control::Remote;
                 send_clip_text(&mut s, sh.shares_text(&pid), &mut clip_sent)?;
-                write_frame(&mut s, &Frame::Enter(pos, eff.to_u8()))?;
+                write_frame(
+                    &mut s,
+                    &Frame::Enter(
+                        pos,
+                        crate::edge::enter_flags(eff, sh.edge_hold.load(Ordering::Relaxed)),
+                    ),
+                )?;
                 mirror = edge_point(pos, far_home, 0, pw, ph);
                 if let Some(edge) = push {
                     let target = edge_point(pos, edge, 1, pw, ph);
@@ -2433,10 +2465,16 @@ fn run_session(
                         }
                         send_clip_text(&mut s, sh.shares_text(&pid), &mut clip_sent)?;
                         let pos = along(x, y);
-                        write_frame(&mut s, &Frame::Enter(pos, eff.to_u8()))?;
+                        let hold = sh.edge_hold.load(Ordering::Relaxed);
+                        write_frame(
+                            &mut s,
+                            &Frame::Enter(pos, crate::edge::enter_flags(eff, hold)),
+                        )?;
                         mirror = edge_point(pos, far_home, 0, pw, ph);
                         edge_push.reset();
-                        effect(Effect::Leave, eff, x, y);
+                        if hold {
+                            effect(Effect::Leave, eff, x, y);
+                        }
                         sh.log(gain.describe());
                         set(mode);
                     }

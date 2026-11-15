@@ -6,7 +6,7 @@ use std::time::Duration;
 pub enum Effect {
     Hold(f32),
     Leave,
-    Arrive,
+    Arrive { smoke: bool },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -40,6 +40,7 @@ const BADGE_HEIGHT: f32 = 76.0;
 const BADGE_RADIUS: f32 = 20.0;
 const ACCENT: (f32, f32, f32) = (255.0, 149.0, 0.0);
 const SMOKE_FAR: (f32, f32, f32) = (255.0, 220.0, 178.0);
+const SMOKE_OPACITY: f32 = 0.5;
 const CARD: (f32, f32, f32) = (18.0, 24.0, 38.0);
 const CARD_EDGE: (f32, f32, f32) = (49.0, 61.0, 84.0);
 const INK: (f32, f32, f32) = (245.0, 247.0, 251.0);
@@ -93,7 +94,7 @@ pub fn show(effect: Effect, spot: Spot) {
     #[cfg(target_os = "windows")]
     overlay::send(effect, spot);
     #[cfg(not(target_os = "windows"))]
-    if !matches!(effect, Effect::Hold(_)) {
+    if matches!(effect, Effect::Leave | Effect::Arrive { smoke: true }) {
         crate::platform::edge_flash(spot.x, spot.y, spot.vertical(), spot.w, spot.h);
     }
 }
@@ -218,7 +219,7 @@ pub fn paint_smoke(pixels: &mut [u32], spot: Spot, frame: Frame, time: f32, stre
             let reach = SMOKE_DEPTH * (0.35 + 0.65 * wave) * (0.55 + 0.45 * strength);
             let fall = (-depth_n / (reach * 0.42).max(1.0)).exp();
             let wisp = 0.72 + 0.28 * (depth_n * 0.09 - time * 9.0 + along_n * 0.021).sin();
-            let alpha = strength * envelope * fall * wisp * 0.92;
+            let alpha = strength * envelope * fall * wisp * SMOKE_OPACITY;
             if alpha < 0.004 {
                 continue;
             }
@@ -596,7 +597,7 @@ mod overlay {
 
     impl Animation {
         fn new(effect: Effect, spot: Spot) -> Self {
-            let badge = (effect == Effect::Arrive)
+            let badge = matches!(effect, Effect::Arrive { .. })
                 .then(|| super::badge(&name(), os_label(), os_glyph(), spot.scale))
                 .flatten();
             let now = Instant::now();
@@ -640,12 +641,14 @@ mod overlay {
                     }
                     paint_smoke(&mut pixels, self.spot, frame, time, leave_levels(time));
                 }
-                Effect::Arrive => {
+                Effect::Arrive { smoke: with_smoke } => {
                     if elapsed > ARRIVE_TIME {
                         return None;
                     }
                     let (smoke, badge_alpha, slide) = arrive_levels(time);
-                    paint_smoke(&mut pixels, self.spot, frame, time, smoke);
+                    if with_smoke {
+                        paint_smoke(&mut pixels, self.spot, frame, time, smoke);
+                    }
                     if let Some(badge) = &self.badge {
                         paint_badge(&mut pixels, self.spot, frame, badge, badge_alpha, slide);
                     }
