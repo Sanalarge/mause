@@ -752,9 +752,9 @@ mod tests {
 
     #[test]
     fn badge_shows_name_and_fades_after_arrival() {
-        let card = badge("DEROOT", "Windows", '\u{f17a}', 1.0).unwrap();
+        let card = badge("OFFICE-PC", "Windows", '\u{f17a}', 1.0).unwrap();
         assert!(card.width >= 190 && card.height == BADGE_HEIGHT as i32);
-        let large = badge("DEROOT", "Windows", '\u{f17a}', 1.5).unwrap();
+        let large = badge("OFFICE-PC", "Windows", '\u{f17a}', 1.5).unwrap();
         assert!(large.height > card.height && large.width > card.width);
         assert!(card.pixels.iter().any(|p| p >> 24 == 255));
         let (_, start, _) = arrive_levels(0.0);
@@ -808,7 +808,7 @@ mod preview {
             h: 1080,
             scale: 1.0,
         };
-        let card = badge("SERDAR BUSSINENS", "macOS", '\u{f179}', 1.0).unwrap();
+        let card = badge("STUDIO-MAC", "macOS", '\u{f179}', 1.0).unwrap();
         for (label, time) in [("arrive1", 0.1f32), ("arrive2", 0.45), ("arrive3", 1.0)] {
             let frame = frame_for(spot, true, card.width);
             let mut pixels = vec![0u32; (frame.width * frame.height) as usize];
@@ -818,7 +818,7 @@ mod preview {
             save(&format!("{dir}/{label}.jpg"), frame, &pixels);
         }
         for (label, name, os, glyph) in [
-            ("card-windows", "DEROOT", "Windows", '\u{f17a}'),
+            ("card-windows", "OFFICE-PC", "Windows", '\u{f17a}'),
             ("card-linux", "UBUNTU-PC", "Linux", '\u{f17c}'),
             ("card-android", "Pixel 8", "Android", '\u{f17b}'),
         ] {

@@ -28,6 +28,11 @@ Mause is an open-source software KVM for controlling computers and Android devic
 | Encrypted transport | Protect paired-device traffic with end-to-end encryption. |
 | Clipboard and files | Move text and files between paired computers. |
 | Media sharing | Share audio, microphone and screens when supported by the platform. |
+| Extra monitor | Extend a computer's desktop onto another computer or an Android tablet. Windows uses an optional virtual display driver, macOS and Linux Wayland create the display themselves. |
+| USB sharing | Use USB devices plugged into another computer from your own. |
+| Edge crossing | Cross as soon as the cursor touches the edge, or turn on edge hold to push against the edge first. The computer you arrive on shows its name and operating system. |
+| Device status | Optionally show CPU, memory, GPU, disk and network usage of connected devices. |
+| Automatic updates | Desktop builds check GitHub Releases on launch and install the newest version. |
 | Native packaging | Install desktop builds with Windows Setup, a macOS app bundle or Linux packages; build Android from source. |
 | System theme | Follow the operating system's light or dark appearance. |
 
@@ -53,7 +58,7 @@ The release build targets glibc 2.35 or newer and uses PipeWire. The first run m
 
 ### Android
 
-Mause does not currently publish a prebuilt Android APK. Build the Android application from source with the instructions below, install the generated debug APK, then enable the Mause accessibility service and input permissions. Android acts as a device controlled by the primary computer; it does not mirror the Android screen to the computer.
+Mause does not currently publish a prebuilt Android APK. Build the Android application from source with the instructions below, install the generated debug APK, then enable the Mause accessibility service and input permissions. Android is controlled with the primary computer's keyboard and mouse. With your permission it can also share its screen, files, audio and cameras with the computer, and it can act as an extra monitor for it.
 
 ## Pair devices
 
