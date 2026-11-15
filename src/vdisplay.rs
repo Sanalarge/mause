@@ -156,20 +156,26 @@ fn activate(device: &[u16; 32]) -> io::Result<Topology> {
 }
 
 fn change(device: &[u16; 32], mode: &DEVMODEW) -> io::Result<()> {
-    let code = unsafe {
+    let staged = unsafe {
         ChangeDisplaySettingsExW(
             device.as_ptr(),
             mode,
             null_mut(),
-            CDS_UPDATEREGISTRY,
+            CDS_UPDATEREGISTRY | CDS_NORESET,
             null(),
         )
     };
-    if code == DISP_CHANGE_SUCCESSFUL {
+    if staged != DISP_CHANGE_SUCCESSFUL {
+        return Err(io::Error::other(format!(
+            "Sanal ekran ayarlanamadı (Windows: {staged})."
+        )));
+    }
+    let applied = unsafe { ChangeDisplaySettingsExW(null(), null(), null_mut(), 0, null()) };
+    if applied == DISP_CHANGE_SUCCESSFUL {
         Ok(())
     } else {
         Err(io::Error::other(format!(
-            "Sanal ekran ayarlanamadı (Windows: {code})."
+            "Sanal ekran düzeni uygulanamadı (Windows: {applied})."
         )))
     }
 }
@@ -260,6 +266,7 @@ impl Lease {
         if !attached {
             mode.Anonymous1.Anonymous2.dmPosition.x = crate::platform::monitors()
                 .iter()
+                .filter(|m| m.name != lease.name)
                 .map(|m| m.x + m.w)
                 .max()
                 .unwrap_or(0);
