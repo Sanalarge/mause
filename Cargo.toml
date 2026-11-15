@@ -1,6 +1,6 @@
 [package]
 name = "mause"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "One keyboard and mouse for all your computers: a software KVM with clipboard, files, audio and screen sharing"
 authors = ["Muhammed Taymur", "Serdar Kayışkıran <serdarkayiskiran@gmail.com>"]
