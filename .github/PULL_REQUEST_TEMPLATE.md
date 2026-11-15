@@ -15,5 +15,5 @@ List affected platforms, permissions, compatibility concerns and follow-up work.
 
 ## Review gate
 
-CI starts after the current revision is approved by `Sanalarge`, `ByTaymur` and `serdarkayiskiran`. New commits require fresh approvals.
+CI starts after the current revision is approved by `Sanalarge`. New commits require fresh approvals.
 

@@ -55,7 +55,7 @@ All external contributions must arrive through a pull request. Direct changes to
 
 Explain the problem, the solution, how you tested it and any platform-specific impact. Include screenshots or a short recording for visible interface changes. Do not mix unrelated cleanup into the same pull request.
 
-The current revision must be approved by all three maintainers: `Sanalarge`, `ByTaymur` and `serdarkayiskiran`. For a maintainer-authored pull request, the author counts as that maintainer's approval and the other two maintainers must approve. Expensive CI jobs start only after this gate is complete. A new commit requires fresh approvals.
+The current revision must be approved by the project owner account, `Sanalarge`. A pull request opened by `Sanalarge` counts as approved by its author. Expensive CI jobs start only after this gate is complete. A new commit requires a fresh approval.
 
 Passing CI does not publish a release. A maintainer starts the release workflow manually after the approved pull request is merged.
 

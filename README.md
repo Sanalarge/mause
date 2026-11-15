@@ -96,7 +96,7 @@ Apple Developer ID and notarization secrets are optional; without them the macOS
 
 ## Contributing
 
-Mause uses a small trunk-based workflow: `main` is the only permanent branch. External contributions are accepted through pull requests. Create a short-lived `feature/*`, `fix/*`, `docs/*` or `chore/*` branch and open a pull request. CI starts after the current revision is approved by all three maintainers; approved changes are squash-merged after CI succeeds. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Mause uses a small trunk-based workflow: `main` is the only permanent branch. External contributions are accepted through pull requests. Create a short-lived `feature/*`, `fix/*`, `docs/*` or `chore/*` branch and open a pull request. CI starts after the current revision is approved by the project owner account, `Sanalarge`; approved changes are squash-merged after CI succeeds. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Security vulnerabilities should not be filed as public issues. Follow [SECURITY.md](SECURITY.md) instead.
 

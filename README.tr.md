@@ -96,7 +96,7 @@ Apple Developer ID ve noter secrets değerleri isteğe bağlıdır; yoksa macOS 
 
 ## Katkıda bulunma
 
-Mause sade bir trunk-based akış kullanır: kalıcı tek dal `main` dalıdır. Dışarıdan katkılar yalnızca pull request ile kabul edilir. Kısa ömürlü bir `feature/*`, `fix/*`, `docs/*` veya `chore/*` dalı açıp pull request oluşturun. Güncel değişiklik üç bakımcının tamamı tarafından onaylandığında CI başlar; CI başarılı olduktan sonra squash merge yapılır. Ayrıntılar için [CONTRIBUTING.md](CONTRIBUTING.md) dosyasına bakın.
+Mause sade bir trunk-based akış kullanır: kalıcı tek dal `main` dalıdır. Dışarıdan katkılar yalnızca pull request ile kabul edilir. Kısa ömürlü bir `feature/*`, `fix/*`, `docs/*` veya `chore/*` dalı açıp pull request oluşturun. Güncel değişiklik proje sahibi `Sanalarge` hesabı tarafından onaylandığında CI başlar; CI başarılı olduktan sonra squash merge yapılır. Ayrıntılar için [CONTRIBUTING.md](CONTRIBUTING.md) dosyasına bakın.
 
 Güvenlik açıklarını herkese açık issue olarak bildirmeyin. [SECURITY.md](SECURITY.md) içindeki yolu kullanın.
 
