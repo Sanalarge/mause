@@ -652,9 +652,8 @@ pub fn capture_monitor(i: usize) -> Option<(super::Capture, super::Monitor)> {
 fn capture_rect(m: &super::Monitor) -> Option<super::Capture> {
     let _dpi = PhysicalPixels::enter();
     use windows_sys::Win32::Graphics::Gdi::{
-        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleBitmap,
-        CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC,
-        SRCCOPY, SelectObject,
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
+        DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
     };
     unsafe {
         let (w, h) = (m.w, m.h);
@@ -684,7 +683,7 @@ fn capture_rect(m: &super::Monitor) -> Option<super::Capture> {
             ReleaseDC(null_mut(), screen);
             return None;
         }
-        let copied = BitBlt(mem, 0, 0, w, h, screen, m.x, m.y, SRCCOPY | CAPTUREBLT) != 0;
+        let copied = BitBlt(mem, 0, 0, w, h, screen, m.x, m.y, SRCCOPY) != 0;
         let mut info: BITMAPINFO = zeroed();
         info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
         info.bmiHeader.biWidth = w;
