@@ -1614,6 +1614,12 @@ fn run_session(
     let mut gain = crate::pointer::Gain::new();
     let local_scale = platform::ui_scale();
     gain.set_local_scale(local_scale);
+    gain.set_screens(
+        platform::monitors()
+            .iter()
+            .map(|m| (m.x, m.y, m.w, m.h))
+            .collect(),
+    );
     let mut incoming = crate::pointer::Incoming::new(local_scale);
     let mut pending: Option<Msg> = None;
 
