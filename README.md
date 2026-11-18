@@ -25,7 +25,7 @@ Mause is an open-source software KVM for controlling computers and Android devic
 | Screen layout | Arrange devices spatially and switch by moving through a screen edge. |
 | Secure pairing | Confirm a matching code on both devices before a connection is trusted. |
 | Encrypted transport | Protect paired-device traffic with end-to-end encryption. |
-| Clipboard and files | Move text and files between paired computers. |
+| Clipboard and files | Move text, clipboard images, and files between paired computers. |
 | Media sharing | Share audio, microphone and screens when supported by the platform. |
 | Native packaging | Install desktop builds with Windows Setup, a macOS app bundle or Linux packages; build Android from source. |
 | System theme | Follow the operating system's light or dark appearance. |
@@ -61,6 +61,10 @@ Mause does not currently publish a prebuilt Android APK. Build the Android appli
 3. Select the discovered device or enter its IP address.
 4. Confirm that the pairing code is identical on both screens.
 5. Place the device in the screen layout and move the pointer across the configured edge.
+
+To share a screenshot, copy it to your system clipboard, move the pointer to the paired computer, and paste into an app that accepts images. Screenshot sharing uses the same clipboard setting as text and requires an updated Mause on both devices. The desktop preview is under **Ayarlar → Pano ile paylaşım**. On Linux, clipboard images use Wayland.
+
+On Android, open the **Pano** card to preview a received image or send one back to the paired computer. Use **Panodaki görseli gönder** for an image already on the clipboard or **Ekran görüntüsü seç ve gönder** for a screenshot saved on the phone.
 
 ## Build from source
 

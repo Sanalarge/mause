@@ -92,10 +92,34 @@ pub fn text_snapshot() -> Option<String> {
         .flatten()
 }
 
-pub fn set_text(t: &str) {
-    let mut o = Options::new();
-    o.foreground(true);
-    let _ = o.copy(Source::Bytes(t.as_bytes().to_vec().into()), CMime::Text);
+pub fn set_text(t: &str) -> bool {
+    Options::new()
+        .copy(Source::Bytes(t.as_bytes().to_vec().into()), CMime::Text)
+        .is_ok()
+}
+
+pub fn image_snapshot() -> Option<Vec<u8>> {
+    let (reader, _) = paste::get_contents(
+        ClipboardType::Regular,
+        Seat::Unspecified,
+        PMime::Specific("image/png"),
+    )
+    .ok()?;
+    let mut bytes = Vec::new();
+    reader
+        .take(crate::clipboard_sync::MAX_PNG as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() <= crate::clipboard_sync::MAX_PNG).then_some(bytes)
+}
+
+pub fn set_image(bytes: Vec<u8>, _: image::RgbaImage) -> bool {
+    Options::new()
+        .copy(
+            Source::Bytes(bytes.into()),
+            CMime::Specific("image/png".into()),
+        )
+        .is_ok()
 }
 
 pub fn carry(sh: std::sync::Arc<crate::core::Shared>) {

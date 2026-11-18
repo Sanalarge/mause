@@ -17,6 +17,7 @@ mod clip;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 #[path = "clip_stub.rs"]
 mod clip;
+mod clipboard_sync;
 mod config;
 mod core;
 mod design;

@@ -1,6 +1,8 @@
 package io.github.bytaymur.mause
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,11 +20,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 class ShareActions(
+    val onClipboard: (Boolean) -> Unit,
+    val onSendClipboard: () -> Unit,
+    val onPickClipboardImage: () -> Unit,
     val onFiles: (Boolean) -> Unit,
     val onStorage: () -> Unit,
     val onSendFiles: () -> Unit,
@@ -102,6 +108,28 @@ fun RemoteCard(actions: ShareActions) {
             actions.onRemotePrefs,
             detail = "Bilgisayarda bir akış tuşuna basınca burada da aynı akış açılır ya da kapanır. Kapalıysa bilgisayar yalnız kapatabilir.",
         )
+    }
+}
+
+@Composable
+fun ClipboardCard(actions: ShareActions) {
+    ShareCard("Pano", AgentState.clipboardAllowed) {
+        SwitchRow("Pano paylaşımı", AgentState.clipboardAllowed, actions.onClipboard)
+        AgentState.clipboardImage?.let { preview ->
+            Image(
+                bitmap = preview.bitmap.asImageBitmap(),
+                contentDescription = "Panodaki görsel",
+                modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp),
+            )
+        }
+        val canSend = AgentState.connected && AgentState.clipboardAllowed && !AgentState.clipboardSending
+        OutlinedButton(onClick = actions.onSendClipboard, enabled = canSend) {
+            Text("Panodaki görseli gönder")
+        }
+        OutlinedButton(onClick = actions.onPickClipboardImage, enabled = canSend) {
+            Text("Ekran görüntüsü seç ve gönder")
+        }
+        if (AgentState.clipboardSending) Note("Görsel gönderiliyor…")
     }
 }
 

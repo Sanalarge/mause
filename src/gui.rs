@@ -208,6 +208,95 @@ enum PopupAction {
     Close,
 }
 
+#[derive(Default)]
+struct ClipboardPreview {
+    texture: Option<(egui::TextureHandle, [u32; 2], [u8; 32])>,
+    pending: Option<std::sync::mpsc::Receiver<ClipboardPreviewUpdate>>,
+    checked: Option<Instant>,
+}
+
+enum ClipboardPreviewUpdate {
+    Unchanged,
+    Empty,
+    Image(ClipboardThumbnail),
+}
+
+struct ClipboardThumbnail {
+    pixels: egui::ColorImage,
+    dimensions: [u32; 2],
+    digest: [u8; 32],
+}
+
+impl ClipboardPreview {
+    fn show(&mut self, ui: &mut egui::Ui) {
+        use blake2::{Blake2s256, Digest};
+        use std::sync::mpsc::TryRecvError;
+
+        if let Some(pending) = &self.pending {
+            match pending.try_recv() {
+                Ok(update) => {
+                    self.pending = None;
+                    if let ClipboardPreviewUpdate::Image(t) = update {
+                        let tex = ui.ctx().load_texture(
+                            "clipboard-image",
+                            t.pixels,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        self.texture = Some((tex, t.dimensions, t.digest));
+                    } else if matches!(update, ClipboardPreviewUpdate::Empty) {
+                        self.texture = None;
+                    }
+                }
+                Err(TryRecvError::Disconnected) => self.pending = None,
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+
+        if self.pending.is_none()
+            && self
+                .checked
+                .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(2))
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let current = self.texture.as_ref().map(|(_, _, digest)| *digest);
+            let ctx = ui.ctx().clone();
+            self.pending = Some(rx);
+            self.checked = Some(Instant::now());
+            std::thread::spawn(move || {
+                let thumbnail = (|| {
+                    let bytes = crate::clip::image_snapshot()?;
+                    let digest: [u8; 32] = Blake2s256::digest(&bytes).into();
+                    if Some(digest) == current {
+                        return Some(ClipboardPreviewUpdate::Unchanged);
+                    }
+                    let image = crate::clipboard_sync::decode_png(&bytes)?;
+                    let dimensions = [image.width(), image.height()];
+                    let image = image::DynamicImage::ImageRgba8(image)
+                        .thumbnail(512, 320)
+                        .into_rgba8();
+                    let size = [image.width() as usize, image.height() as usize];
+                    Some(ClipboardPreviewUpdate::Image(ClipboardThumbnail {
+                        pixels: egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw()),
+                        dimensions,
+                        digest,
+                    }))
+                })()
+                .unwrap_or(ClipboardPreviewUpdate::Empty);
+                let _ = tx.send(thumbnail);
+                ctx.request_repaint();
+            });
+        }
+        ui.ctx().request_repaint_after(Duration::from_secs(2));
+        ui.label("Panodaki görsel");
+        if let Some((texture, [width, height], _)) = &self.texture {
+            ui.add(egui::Image::new(texture).max_size(egui::vec2(320.0, 180.0)));
+            ui.label(format!("{width} × {height}"));
+        } else if self.pending.is_none() {
+            ui.label("Panoda görsel yok.");
+        }
+    }
+}
+
 struct App {
     page: Page,
     logo: Option<egui::TextureHandle>,
@@ -242,6 +331,7 @@ struct App {
     file_dialog: Option<FileDialog>,
     pair_done_at: Option<Instant>,
     screen_tex: Option<(egui::TextureHandle, u64)>,
+    clipboard_preview: ClipboardPreview,
     camera: Option<CameraView>,
     torch_on: HashSet<String>,
     vcam_note: Arc<Mutex<Option<String>>>,
@@ -321,6 +411,7 @@ impl App {
             popup: (std::env::var("MAUSE_POPUP").as_deref() == Ok("1")).then(|| Popup::new(None)),
             popup_device: None,
             screen_tex: None,
+            clipboard_preview: ClipboardPreview::default(),
             camera: None,
             torch_on: HashSet::new(),
             vcam_note: Arc::default(),
@@ -6150,8 +6241,8 @@ impl App {
             let mut st = self.cfg.share_text;
             if toggle_row(
                 ui,
-                "Kopyalanan metni de taşı",
-                Some("Mouse karşıya geçince panodaki metin de karşıya gider."),
+                "Kopyalanan metni ve görselleri taşı",
+                Some("İmleç karşıya geçince panodaki metin veya ekran görüntüsü de karşıya gider."),
                 &mut st,
                 supported,
             )
@@ -6165,6 +6256,10 @@ impl App {
                 self.cfg.save();
             }
             divider(ui);
+            if supported {
+                self.clipboard_preview.show(ui);
+                divider(ui);
+            }
             let inbox = transfer::inbox();
             if setting_row(
                 ui,
@@ -6813,6 +6908,7 @@ fn ui_fixture(page: Page, theme: u8) -> App {
         popup_device: None,
         tray_click: None,
         screen_tex: None,
+        clipboard_preview: ClipboardPreview::default(),
         camera: None,
         torch_on: HashSet::new(),
         vcam_note: Arc::default(),

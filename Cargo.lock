@@ -2813,6 +2813,7 @@ dependencies = [
  "eframe",
  "evdev",
  "getrandom 0.4.3",
+ "image",
  "jpeg-decoder",
  "jpeg-encoder",
  "ksni",

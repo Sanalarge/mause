@@ -36,10 +36,40 @@ pub fn text_snapshot() -> Option<String> {
     (!s.is_empty() && s.len() <= MAX_TEXT).then_some(s)
 }
 
-pub fn set_text(t: &str) {
-    if let Some((_lock, mut b)) = board() {
-        let _ = b.set_text(t);
+pub fn set_text(t: &str) -> bool {
+    board().is_some_and(|(_lock, mut b)| b.set_text(t).is_ok())
+}
+
+pub fn image_snapshot() -> Option<Vec<u8>> {
+    use image::ImageEncoder;
+
+    let img = {
+        let (_lock, mut b) = board()?;
+        b.get_image().ok()?
+    };
+    let width = u32::try_from(img.width).ok()?;
+    let height = u32::try_from(img.height).ok()?;
+    if !crate::clipboard_sync::valid_dimensions(width, height) {
+        return None;
     }
+    let mut bytes = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut bytes)
+        .write_image(&img.bytes, width, height, image::ExtendedColorType::Rgba8)
+        .ok()?;
+    (bytes.len() <= crate::clipboard_sync::MAX_PNG).then_some(bytes)
+}
+
+pub fn set_image(_: Vec<u8>, img: image::RgbaImage) -> bool {
+    use std::borrow::Cow;
+
+    board().is_some_and(|(_lock, mut b)| {
+        b.set_image(arboard::ImageData {
+            width: img.width() as usize,
+            height: img.height() as usize,
+            bytes: Cow::Owned(img.into_raw()),
+        })
+        .is_ok()
+    })
 }
 
 pub fn carry(sh: std::sync::Arc<crate::core::Shared>) {

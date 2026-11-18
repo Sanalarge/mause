@@ -9,6 +9,7 @@ class NativeBridge(private val callbacks: Callbacks) {
         fun onInput(events: IntArray)
         fun onRelease()
         fun onClipboard(text: String)
+        fun onClipboardImage(png: ByteArray): Boolean
         fun onActivity(text: String)
         fun onAudioRequest(kind: Int, on: Boolean)
         fun onAudioPlay(kind: Int, pcm: ByteArray)
@@ -43,6 +44,7 @@ class NativeBridge(private val callbacks: Callbacks) {
     external fun screenFrame(jpeg: ByteArray, length: Int, width: Int, height: Int): Boolean
     external fun screenInfo(control: Boolean, label: String)
     external fun screenFailed(reason: String)
+    external fun sendClipboardImage(png: ByteArray)
     external fun sendFile(descriptor: Int, name: String, size: Long)
     external fun deviceReply(op: Int, data: ByteArray)
     external fun cameraOpen(): Boolean
@@ -59,6 +61,7 @@ class NativeBridge(private val callbacks: Callbacks) {
     private fun nativeInput(events: IntArray) = callbacks.onInput(events)
     private fun nativeRelease() = callbacks.onRelease()
     private fun nativeClipboard(text: String) = callbacks.onClipboard(text)
+    private fun nativeClipboardImage(png: ByteArray) = callbacks.onClipboardImage(png)
     private fun nativeActivity(text: String) = callbacks.onActivity(text)
     private fun nativeAudioRequest(kind: Int, on: Boolean) = callbacks.onAudioRequest(kind, on)
     private fun nativeAudioPlay(kind: Int, pcm: ByteArray) = callbacks.onAudioPlay(kind, pcm)

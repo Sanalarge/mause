@@ -40,6 +40,7 @@ pub struct Link {
     pub parent: String,
     pub control: Control,
     pub prefs: Option<u16>,
+    clipboard: Option<Arc<crate::clipboard_sync::Session>>,
     pub sending: [bool; 2],
     pub screen_out: bool,
     pub version: Option<String>,
@@ -333,6 +334,22 @@ impl Shared {
             .map(|l| l.id.clone())
             .unwrap_or_default();
         self.perms_for(&id)
+    }
+
+    pub(crate) fn clipboard_session(
+        &self,
+        ip: &str,
+        hash: &[u8; 32],
+        incoming: bool,
+    ) -> Option<Arc<crate::clipboard_sync::Session>> {
+        if self.stopping() {
+            return None;
+        }
+        let (id, clipboard) = self.links.lock().unwrap().iter().find_map(|link| {
+            let clipboard = link.clipboard.as_ref()?;
+            (link.ip == ip && &clipboard.hash == hash).then(|| (link.id.clone(), clipboard.clone()))
+        })?;
+        (self.shares_text(&id) && (!incoming || self.perms_for(&id).clip_in)).then_some(clipboard)
     }
 
     fn shares_text(&self, id: &str) -> bool {
@@ -1251,6 +1268,11 @@ fn run_session(
             | flows::SUPPORTS_USB
             | flows::SUPPORTS_VERSION
             | flows::SUPPORTS_HARDWARE
+            | if crate::clip::AVAILABLE {
+                flows::SUPPORTS_CLIPBOARD_IMAGES
+            } else {
+                0
+            }
     );
     let parse = parse_ident;
     let (eff, peer, mut pflags, pid, far_home, (pw, ph)) = if initiator {
@@ -1324,6 +1346,8 @@ fn run_session(
     let screen_ok = pflags & flows::SUPPORTS_SCREEN != 0 && pflags != 0xFF;
     let screen2_ok = pflags & flows::SUPPORTS_SCREEN2 != 0 && pflags != 0xFF;
     let usb_ok = pflags & flows::SUPPORTS_USB != 0 && pflags != 0xFF;
+    let clipboard = (crate::clip::AVAILABLE && pflags & flows::SUPPORTS_CLIPBOARD_IMAGES != 0)
+        .then(|| Arc::new(crate::clipboard_sync::Session::new(hash)));
     let hardware_ok = pflags & flows::SUPPORTS_HARDWARE != 0 && pflags != 0xFF;
     let primary = sh
         .primary
@@ -1352,6 +1376,7 @@ fn run_session(
         parent: parent.clone(),
         control: Control::Local,
         prefs: None,
+        clipboard: clipboard.clone(),
         sending: [false; 2],
         screen_out: false,
         version: (!knows_version).then(String::new),
@@ -1409,6 +1434,19 @@ fn run_session(
     };
     let mut mirror = (pw / 2, ph / 2);
     let mut clip_sent = sh.last_text.lock().unwrap().clone();
+    let clipboard_worker = clipboard.map(|clipboard| {
+        crate::clipboard_sync::worker(sh.clone(), peer_ip.clone(), secret.clone(), clipboard)
+    });
+    let share_clipboard = |s: &mut Secure, clip_sent: &mut String| {
+        if let Some(worker) = &clipboard_worker {
+            if sh.shares_text(&pid) {
+                let _ = worker.try_send(());
+            }
+            Ok(())
+        } else {
+            send_clip_text(s, sh.shares_text(&pid), clip_sent)
+        }
+    };
     let (mut x, mut y) = (w / 2, h / 2);
     let mut epoch = 0u64;
     let mut mode = Control::Local;
@@ -1749,7 +1787,7 @@ fn run_session(
                         if files_mine {
                             crate::clip::carry(sh.clone());
                         }
-                        send_clip_text(&mut s, sh.shares_text(&pid), &mut clip_sent)?;
+                        share_clipboard(&mut s, &mut clip_sent)?;
                         write_frame(&mut s, &Frame::Leave(along(x, y)))?;
                         set(mode);
                     }
@@ -1770,7 +1808,11 @@ fn run_session(
                     platform::grab(false);
                     set(mode);
                 }
-                Frame::ClipText(t) if sh.shares_text(&pid) && sh.perms_for(&pid).clip_in => {
+                Frame::ClipText(t)
+                    if clipboard_worker.is_none()
+                        && sh.shares_text(&pid)
+                        && sh.perms_for(&pid).clip_in =>
+                {
                     *sh.last_text.lock().unwrap() = t.clone();
                     clip_sent = t.clone();
                     thread::spawn(move || crate::clip::set_text(&t));
@@ -1948,7 +1990,7 @@ fn run_session(
             },
             Msg::Takeover(id, pos, push) if id == session => {
                 mode = Control::Remote;
-                send_clip_text(&mut s, sh.shares_text(&pid), &mut clip_sent)?;
+                share_clipboard(&mut s, &mut clip_sent)?;
                 write_frame(&mut s, &Frame::Enter(pos, eff.to_u8()))?;
                 mirror = edge_point(pos, far_home, 0, pw, ph);
                 if let Some(edge) = push {
@@ -2066,7 +2108,7 @@ fn run_session(
                         if files_mine {
                             crate::clip::carry(sh.clone());
                         }
-                        send_clip_text(&mut s, sh.shares_text(&pid), &mut clip_sent)?;
+                        share_clipboard(&mut s, &mut clip_sent)?;
                         let pos = along(x, y);
                         write_frame(&mut s, &Frame::Enter(pos, eff.to_u8()))?;
                         mirror = edge_point(pos, far_home, 0, pw, ph);
@@ -2270,10 +2312,48 @@ mod tests {
             parent: String::new(),
             control: Control::Local,
             prefs: None,
+            clipboard: None,
             sending: [false; 2],
             screen_out: false,
             version: None,
         });
+    }
+
+    #[test]
+    fn clipboard_transfer_requires_the_active_session_and_clipboard_permission() {
+        use std::io::{Read, Write};
+
+        let pair = crate::test_support::TransferPair::new();
+        let receiver = &pair.receiver;
+        let ip = "127.0.0.1";
+        let hash = [2; 32];
+        link(receiver, 1, "A", Side::Right);
+        {
+            let mut links = receiver.links.lock().unwrap();
+            links[0].ip = ip.into();
+            links[0].clipboard = Some(Arc::new(crate::clipboard_sync::Session::new(hash)));
+        }
+        receiver.apply_pref(Pref::ShareText, true);
+        receiver.apply_pref(Pref::ClipIn, false);
+        let offer_image = |hash: &[u8; 32]| {
+            let mut s = crate::transfer::connect_to(&pair.sender, ip, "test-secret").unwrap();
+            s.write_all(crate::clipboard_sync::MAGIC).unwrap();
+            s.write_all(hash).unwrap();
+            s.write_all(&[2]).unwrap();
+            s.write_all(&3u32.to_le_bytes()).unwrap();
+            let mut status = [0];
+            s.read_exact(&mut status).unwrap();
+            (s, status[0])
+        };
+        assert_eq!(offer_image(&hash).1, 0);
+        receiver.apply_pref(Pref::ClipIn, true);
+        assert_eq!(offer_image(&[3; 32]).1, 0);
+        let (mut s, status) = offer_image(&hash);
+        assert_eq!(status, 1);
+        s.write_all(b"bad").unwrap();
+        let mut status = [1];
+        s.read_exact(&mut status).unwrap();
+        assert_eq!(status, [0]);
     }
 
     #[test]

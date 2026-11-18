@@ -124,8 +124,40 @@ class AgentService : Service(), NativeBridge.Callbacks {
 
     override fun onClipboard(text: String) {
         main.post {
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            if (!AgentState.clipboardAllowed) return@post
+            val clipboard = getSystemService(ClipboardManager::class.java)
             clipboard.setPrimaryClip(ClipData.newPlainText("Mause", text))
+            AgentState.clipboardImage = null
+        }
+    }
+
+    override fun onClipboardImage(png: ByteArray): Boolean = runCatching {
+        val preview = ClipboardImages.store(this, png)
+        if (!AgentState.clipboardAllowed) return@runCatching false
+        ClipboardImages.copy(this, preview.uri)
+        main.post { AgentState.clipboardImage = preview }
+        true
+    }.getOrDefault(false)
+
+    fun sendClipboardImage(uri: Uri) {
+        if (!AgentState.connected || !AgentState.clipboardAllowed || AgentState.clipboardSending) return
+        AgentState.clipboardSending = true
+        thread(name = "mause-clipboard") {
+            try {
+                val png = ClipboardImages.read(this, uri)
+                val preview = ClipboardImages.store(this, png)
+                main.post {
+                    if (AgentState.clipboardAllowed) {
+                        ClipboardImages.copy(this, preview.uri)
+                        AgentState.clipboardImage = preview
+                    }
+                }
+                bridge.sendClipboardImage(png)
+            } catch (error: Exception) {
+                note("Görsel gönderilemedi: ${error.message}")
+            } finally {
+                main.post { AgentState.clipboardSending = false }
+            }
         }
     }
 
@@ -159,9 +191,11 @@ class AgentService : Service(), NativeBridge.Callbacks {
                 1 -> AgentState.shareAudio = false
                 2 -> AgentState.shareMic = false
                 3 -> AgentState.filesAllowed = false
+                4, 8 -> AgentState.clipboardAllowed = false
                 6 -> AgentState.playPcAudio = false
             }
             SharePrefs.save(this)
+            if (pref == 4 || pref == 8) pushShare()
         }
         if (pref == 6) worker.execute { syncPlayback() }
     }
@@ -171,6 +205,16 @@ class AgentService : Service(), NativeBridge.Callbacks {
     }
 
     override fun onPrefOn(pref: Int) {
+        if (pref == 4 || pref == 8) {
+            main.post {
+                if (AgentState.remotePrefs) {
+                    AgentState.clipboardAllowed = true
+                    SharePrefs.save(this)
+                }
+                pushShare()
+            }
+            return
+        }
         if (AgentState.remotePrefs) {
             when (pref) {
                 1 -> AgentState.shareAudio = true

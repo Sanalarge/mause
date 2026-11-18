@@ -149,12 +149,11 @@ fn list_dir(path: &Path) -> io::Result<Vec<Entry>> {
 
 pub fn serve_connection<S: Read + Write>(
     stream: &mut S,
+    magic: [u8; 4],
     roots: &Roots,
     allowed: bool,
     notify: &dyn Fn(&str),
 ) -> io::Result<()> {
-    let mut magic = [0u8; 4];
-    stream.read_exact(&mut magic)?;
     if !allowed {
         if [LIST, GET, PUT, MKDIR, DELETE].contains(&&magic) {
             get_str(stream)?;
@@ -383,7 +382,11 @@ mod tests {
 
     fn start(roots: Roots, allowed: bool) -> (UnixStream, thread::JoinHandle<io::Result<()>>) {
         let (client, mut server) = UnixStream::pair().unwrap();
-        let handle = thread::spawn(move || serve_connection(&mut server, &roots, allowed, &|_| {}));
+        let handle = thread::spawn(move || {
+            let mut magic = [0; 4];
+            server.read_exact(&mut magic)?;
+            serve_connection(&mut server, magic, &roots, allowed, &|_| {})
+        });
         (client, handle)
     }
 
