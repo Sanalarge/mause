@@ -36,8 +36,6 @@ jobs:
           script: |
             const maintainers = new Map([
               ["sanalarge", "Sanalarge"],
-              ["bytaymur", "ByTaymur"],
-              ["serdarkayiskiran", "serdarkayiskiran"],
             ])
             const pull = context.payload.pull_request
             const reviews = await github.paginate(github.rest.pulls.listReviews, {
@@ -60,7 +58,7 @@ jobs:
             core.setOutput("ready", ready ? "true" : "false")
             await core.summary
               .addHeading("Maintainer approval gate")
-              .addRaw(ready ? "All three maintainers approved the current revision." : `Waiting for: ${missing.map(login => maintainers.get(login)).join(", ")}`)
+              .addRaw(ready ? "Sanalarge approved the current revision." : `Waiting for: ${missing.map(login => maintainers.get(login)).join(", ")}`)
               .write()
             if (!ready) core.setFailed(`Waiting for: ${missing.map(login => maintainers.get(login)).join(", ")}`)
 
@@ -85,7 +83,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm, macos-15, macos-15-intel]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm, macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:

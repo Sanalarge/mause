@@ -23,10 +23,16 @@ Mause is an open-source software KVM for controlling computers and Android devic
 | --- | --- |
 | Seamless input | Share keyboard and mouse across Windows, macOS, Linux and Android devices. |
 | Screen layout | Arrange devices spatially and switch by moving through a screen edge. |
+| Per-computer preferences | Recognize connected PCs by identity and automatically restore their saved layout and sharing settings. PCs sharing a saved position are placed next to each other when connected together. |
 | Secure pairing | Confirm a matching code on both devices before a connection is trusted. |
 | Encrypted transport | Protect paired-device traffic with end-to-end encryption. |
 | Clipboard and files | Move text, clipboard images, and files between paired computers. |
 | Media sharing | Share audio, microphone and screens when supported by the platform. |
+| Extra monitor | Extend a computer's desktop onto another computer or an Android tablet. Windows uses an optional virtual display driver, macOS and Linux Wayland create the display themselves. |
+| USB sharing | Use USB devices plugged into another computer from your own. |
+| Edge crossing | Cross as soon as the cursor touches the edge, or turn on edge hold to push against the edge first. The computer you arrive on shows its name and operating system. |
+| Device status | Optionally show CPU, memory, GPU, disk and network usage of connected devices. |
+| Automatic updates | Desktop builds check GitHub Releases on launch and install the newest version. |
 | Native packaging | Install desktop builds with Windows Setup, a macOS app bundle or Linux packages; build Android from source. |
 | System theme | Follow the operating system's light or dark appearance. |
 
@@ -52,7 +58,7 @@ The release build targets glibc 2.35 or newer and uses PipeWire. The first run m
 
 ### Android
 
-Mause does not currently publish a prebuilt Android APK. Build the Android application from source with the instructions below, install the generated debug APK, then enable the Mause accessibility service and input permissions. Android acts as a device controlled by the primary computer; it does not mirror the Android screen to the computer.
+Mause does not currently publish a prebuilt Android APK. Build the Android application from source with the instructions below, install the generated debug APK, then enable the Mause accessibility service and input permissions. Android is controlled with the primary computer's keyboard and mouse. With your permission it can also share its screen, files, audio and cameras with the computer, and it can act as an extra monitor for it.
 
 ## Pair devices
 
@@ -99,7 +105,7 @@ Apple Developer ID and notarization secrets are optional; without them the macOS
 
 ## Contributing
 
-Mause uses a small trunk-based workflow: `main` is the only permanent branch. External contributions are accepted through pull requests. Create a short-lived `feature/*`, `fix/*`, `docs/*` or `chore/*` branch and open a pull request. CI starts after the current revision is approved by all three maintainers; approved changes are squash-merged after CI succeeds. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Mause uses a small trunk-based workflow: `main` is the only permanent branch. External contributions are accepted through pull requests. Create a short-lived `feature/*`, `fix/*`, `docs/*` or `chore/*` branch and open a pull request. CI starts after the current revision is approved by the project owner account, `Sanalarge`; approved changes are squash-merged after CI succeeds. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Security vulnerabilities should not be filed as public issues. Follow [SECURITY.md](SECURITY.md) instead.
 

@@ -76,7 +76,6 @@ fn fingerprint(kind: Kind, bytes: &[u8], image: Option<&RgbaImage>) -> Fingerpri
     let mut digest = Blake2s256::new();
     digest.update([kind as u8]);
     if let Some(img) = image {
-        // Different clipboard backends may encode the same pixels as different PNGs.
         digest.update(img.width().to_le_bytes());
         digest.update(img.height().to_le_bytes());
         digest.update(img.as_raw());
@@ -87,7 +86,6 @@ fn fingerprint(kind: Kind, bytes: &[u8], image: Option<&RgbaImage>) -> Fingerpri
 }
 
 fn snapshot() -> Option<(Kind, Vec<u8>, Fingerprint)> {
-    // Leave file-list clipboard entries to the existing file-carry path.
     if clip::current_files().is_some() {
         return None;
     }
@@ -109,7 +107,6 @@ pub(crate) fn worker(
     secret: String,
     session: Arc<Session>,
 ) -> SyncSender<()> {
-    // Keep at most one crossing pending while the current clipboard is in flight.
     let (tx, rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
         while rx.recv().is_ok() {

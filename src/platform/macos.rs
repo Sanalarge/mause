@@ -142,6 +142,10 @@ fn modifier_mask(mac: u16) -> Option<u64> {
 
 pub fn init() {}
 
+pub(super) fn flash_window(x: i32, y: i32, w: i32, h: i32) {
+    super::macos_flash::show(x, y, w, h);
+}
+
 pub struct Injector {
     down: HashSet<u16>,
     flags: CGEventFlags,
@@ -583,7 +587,7 @@ pub fn screen_capture_begin() -> bool {
 }
 
 pub fn screen_capture_begin_virtual(_: (u16, u16)) -> bool {
-    false
+    crate::vdisplay::supported() && screen_capture_begin()
 }
 
 pub fn screen_capture_error() -> Option<String> {
@@ -619,6 +623,10 @@ fn displays() -> Vec<CGDisplay> {
         ids.push(main);
     }
     ids.into_iter().map(CGDisplay::new).collect()
+}
+
+pub fn display_index(id: u32) -> Option<usize> {
+    displays().iter().position(|display| display.id == id)
 }
 
 pub fn monitors() -> Vec<super::Monitor> {
@@ -756,4 +764,8 @@ mod tests {
         let p = keep_on_screen(&main, CGPoint::new(10.0, 10.0), CGPoint::new(15.0, 12.0));
         assert_eq!((p.x, p.y), (15.0, 12.0));
     }
+}
+
+pub fn ui_scale() -> f32 {
+    1.0
 }

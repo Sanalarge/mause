@@ -4,6 +4,8 @@ pub const CAMERA_STOP: u8 = 2;
 pub const TORCH: u8 = 3;
 pub const VIBRATE: u8 = 4;
 pub const STATUS: u8 = 5;
+pub const METRICS_SUBSCRIBE: u8 = 6;
+pub const METRICS_SAMPLE: u8 = 7;
 pub const CAMERA_PORT: u16 = 24807;
 
 #[derive(Clone, Debug, PartialEq)]

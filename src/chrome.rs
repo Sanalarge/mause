@@ -1,5 +1,5 @@
-use crate::design::Palette;
-use eframe::egui::{self, Color32, Rect, Sense, Stroke, StrokeKind, Vec2};
+use crate::design::{self, Icon, Palette};
+use eframe::egui::{self, Color32, Rect, Sense, Stroke, Vec2};
 
 #[derive(Clone, Copy)]
 enum Caption {
@@ -75,58 +75,15 @@ pub fn titlebar(
                     );
                 }
                 let ink = if danger { palette.ground } else { palette.ink };
-                let center = rect.center();
-                let stroke = Stroke::new(1.4, ink);
-                match action {
-                    Caption::Minimize => {
-                        ui.painter().line_segment(
-                            [center + Vec2::new(-5.0, 0.0), center + Vec2::new(5.0, 0.0)],
-                            stroke,
-                        );
+                let glyph = match action {
+                    Caption::Minimize => Icon::Minimize,
+                    Caption::Maximize if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) => {
+                        Icon::Restore
                     }
-                    Caption::Maximize => {
-                        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                        if maximized {
-                            ui.painter().rect_stroke(
-                                Rect::from_center_size(
-                                    center + Vec2::new(2.0, -2.0),
-                                    Vec2::splat(8.0),
-                                ),
-                                0,
-                                stroke,
-                                StrokeKind::Inside,
-                            );
-                            ui.painter().rect_filled(
-                                Rect::from_center_size(
-                                    center + Vec2::new(-1.0, 1.0),
-                                    Vec2::splat(9.0),
-                                ),
-                                0,
-                                if response.hovered() {
-                                    palette.hover
-                                } else {
-                                    palette.ground
-                                },
-                            );
-                        }
-                        ui.painter().rect_stroke(
-                            Rect::from_center_size(center, Vec2::splat(10.0)),
-                            0,
-                            stroke,
-                            StrokeKind::Inside,
-                        );
-                    }
-                    Caption::Close => {
-                        ui.painter().line_segment(
-                            [center + Vec2::new(-5.0, -5.0), center + Vec2::new(5.0, 5.0)],
-                            stroke,
-                        );
-                        ui.painter().line_segment(
-                            [center + Vec2::new(5.0, -5.0), center + Vec2::new(-5.0, 5.0)],
-                            stroke,
-                        );
-                    }
-                }
+                    Caption::Maximize => Icon::Maximize,
+                    Caption::Close => Icon::Close,
+                };
+                design::icon(ui.painter(), rect.center(), glyph, ink, 16.0);
                 if response.clicked() {
                     let command = match action {
                         Caption::Minimize => egui::ViewportCommand::Minimized(true),

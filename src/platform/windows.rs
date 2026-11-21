@@ -558,7 +558,7 @@ pub fn screen_capture_begin() -> bool {
 }
 
 pub fn screen_capture_begin_virtual(_: (u16, u16)) -> bool {
-    false
+    true
 }
 
 pub fn screen_capture_error() -> Option<String> {
@@ -652,9 +652,8 @@ pub fn capture_monitor(i: usize) -> Option<(super::Capture, super::Monitor)> {
 fn capture_rect(m: &super::Monitor) -> Option<super::Capture> {
     let _dpi = PhysicalPixels::enter();
     use windows_sys::Win32::Graphics::Gdi::{
-        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleBitmap,
-        CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC,
-        SRCCOPY, SelectObject,
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
+        DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
     };
     unsafe {
         let (w, h) = (m.w, m.h);
@@ -684,7 +683,7 @@ fn capture_rect(m: &super::Monitor) -> Option<super::Capture> {
             ReleaseDC(null_mut(), screen);
             return None;
         }
-        let copied = BitBlt(mem, 0, 0, w, h, screen, m.x, m.y, SRCCOPY | CAPTUREBLT) != 0;
+        let copied = BitBlt(mem, 0, 0, w, h, screen, m.x, m.y, SRCCOPY) != 0;
         let mut info: BITMAPINFO = zeroed();
         info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
         info.bmiHeader.biWidth = w;
@@ -747,4 +746,13 @@ pub fn config_dir() -> PathBuf {
 
 pub fn hostname() -> String {
     std::env::var("COMPUTERNAME").unwrap_or_default()
+}
+
+pub fn ui_scale() -> f32 {
+    let dpi = unsafe { windows_sys::Win32::UI::HiDpi::GetDpiForSystem() };
+    if dpi == 0 {
+        1.0
+    } else {
+        (dpi as f32 / 96.0).clamp(0.5, 4.0)
+    }
 }

@@ -5,6 +5,9 @@ const BUCKETS: usize = 8;
 const WINDOW: Duration = Duration::from_millis(40);
 const STALE: Duration = Duration::from_millis(150);
 const IDLE: Duration = Duration::from_millis(100);
+const WALL_MARGIN: i32 = 3;
+
+pub type Screen = (i32, i32, i32, i32);
 
 pub struct Gain {
     table: [f32; BUCKETS],
@@ -15,6 +18,8 @@ pub struct Gain {
     speed: f32,
     last_send: Option<Instant>,
     remainder: (f32, f32),
+    out_scale: f32,
+    screens: Vec<Screen>,
 }
 
 impl Default for Gain {
@@ -34,7 +39,28 @@ impl Gain {
             speed: 0.0,
             last_send: None,
             remainder: (0.0, 0.0),
+            out_scale: 1.0,
+            screens: Vec::new(),
         }
+    }
+
+    pub fn set_screens(&mut self, screens: Vec<Screen>) {
+        self.screens = screens;
+    }
+
+    fn against_wall(&self, (x, y): (i32, i32)) -> bool {
+        if self.screens.is_empty() {
+            return false;
+        }
+        let inside = |px: i32, py: i32| {
+            self.screens
+                .iter()
+                .any(|&(sx, sy, sw, sh)| px >= sx && px < sx + sw && py >= sy && py < sy + sh)
+        };
+        let reach = WALL_MARGIN + 1;
+        [(-reach, 0), (reach, 0), (0, -reach), (0, reach)]
+            .iter()
+            .any(|&(dx, dy)| !inside(x + dx, y + dy))
     }
 
     pub fn observe(&mut self, dx: i32, dy: i32, cursor: impl FnOnce() -> Option<(i32, i32)>) {
@@ -63,7 +89,8 @@ impl Gain {
         if let (Some(start), Some(end)) = (self.cursor_start, end) {
             let raw = length(self.raw.0, self.raw.1);
             let moved = length(end.0 - start.0, end.1 - start.1);
-            if raw >= 4.0 && moved > 0.0 {
+            let free = !self.against_wall(start) && !self.against_wall(end);
+            if raw >= 4.0 && moved > 0.0 && free {
                 let millis = elapsed.as_secs_f32() * 1000.0;
                 self.learn(bucket(raw * 10.0 / millis), moved / raw);
             }
@@ -91,7 +118,11 @@ impl Gain {
         (0..BUCKETS)
             .filter(|&i| self.seen[i])
             .min_by_key(|&i| i.abs_diff(index))
-            .map_or(1.0, |i| self.table[i])
+            .map_or_else(|| fallback(index), |i| self.table[i])
+    }
+
+    pub fn set_local_scale(&mut self, scale: f32) {
+        self.out_scale = 1.0 / scale.clamp(0.5, 4.0);
     }
 
     pub fn describe(&self) -> String {
@@ -129,9 +160,40 @@ impl Gain {
                 instant
             }
         };
-        let gain = self.gain(bucket(self.speed));
+        let gain = self.gain(bucket(self.speed)) * self.out_scale;
         let fx = dx as f32 * gain + self.remainder.0;
         let fy = dy as f32 * gain + self.remainder.1;
+        let (sx, sy) = (fx.round(), fy.round());
+        self.remainder = (fx - sx, fy - sy);
+        replace_motion(evs, sx as i32, sy as i32);
+    }
+}
+
+fn fallback(index: usize) -> f32 {
+    const CURVE: [f32; BUCKETS] = [1.0, 1.0, 1.15, 1.4, 1.75, 2.1, 2.4, 2.6];
+    CURVE[index]
+}
+
+pub struct Incoming {
+    scale: f32,
+    remainder: (f32, f32),
+}
+
+impl Incoming {
+    pub fn new(scale: f32) -> Self {
+        Self {
+            scale: scale.clamp(0.5, 4.0),
+            remainder: (0.0, 0.0),
+        }
+    }
+
+    pub fn apply(&mut self, evs: &mut Vec<Ev>) {
+        let (dx, dy) = motion(evs);
+        if (dx == 0 && dy == 0) || self.scale == 1.0 {
+            return;
+        }
+        let fx = dx as f32 * self.scale + self.remainder.0;
+        let fy = dy as f32 * self.scale + self.remainder.1;
         let (sx, sy) = (fx.round(), fy.round());
         self.remainder = (fx - sx, fy - sy);
         replace_motion(evs, sx as i32, sy as i32);
@@ -194,11 +256,64 @@ mod tests {
     }
 
     #[test]
-    fn ogrenilmemis_kazanc_hareketi_degistirmez() {
+    fn pushing_against_a_wall_does_not_slow_the_remote_pointer() {
         let mut gain = Gain::new();
-        let mut evs = moves(7, -3);
+        gain.set_screens(vec![(0, 0, 1920, 1080)]);
+        let mut now = teach(&mut gain, 6, 3, 6);
+        let learned = gain.gain(bucket(6.0));
+        for _ in 0..8 {
+            now += Duration::from_millis(400);
+            let mut cursor = (1800, 500);
+            gain.observe_at(0, 0, now, || Some(cursor));
+            for _ in 0..12 {
+                now += Duration::from_millis(10);
+                cursor.0 = (cursor.0 + 18).min(1919);
+                gain.observe_at(6, 0, now, || Some(cursor));
+            }
+        }
+        assert!(
+            gain.gain(bucket(6.0)) >= learned * 0.95,
+            "{} < {learned}",
+            gain.gain(bucket(6.0))
+        );
+    }
+
+    #[test]
+    fn only_outer_edges_count_as_walls() {
+        let mut gain = Gain::new();
+        gain.set_screens(vec![(0, 0, 1920, 1080), (1920, 0, 2560, 1440)]);
+        assert!(!gain.against_wall((1919, 500)));
+        assert!(!gain.against_wall((1920, 500)));
+        assert!(gain.against_wall((0, 500)));
+        assert!(gain.against_wall((1000, 1079)));
+        assert!(gain.against_wall((4479, 700)));
+        assert!(!gain.against_wall((960, 540)));
+    }
+
+    #[test]
+    fn ogrenilmemis_yavas_hareket_degismez() {
+        let mut gain = Gain::new();
+        let mut evs = moves(1, -1);
         gain.scale(&mut evs);
-        assert_eq!(motion(&evs), (7, -3));
+        assert_eq!(motion(&evs), (1, -1));
+    }
+
+    #[test]
+    fn olcek_farki_hizi_esitler() {
+        let mut gain = Gain::new();
+        gain.learn(0, 1.0);
+        gain.set_local_scale(2.0);
+        let mut evs = moves(10, 0);
+        gain.scale_at(&mut evs, Instant::now());
+        assert_eq!(motion(&evs), (5, 0));
+        let mut inc = Incoming::new(1.5);
+        let mut total = 0;
+        for _ in 0..4 {
+            let mut e = moves(1, 0);
+            inc.apply(&mut e);
+            total += motion(&e).0;
+        }
+        assert_eq!(total, 6);
     }
 
     #[test]

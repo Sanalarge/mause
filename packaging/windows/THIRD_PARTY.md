@@ -1,5 +1,12 @@
 # Windows setup components
 
+Mause can optionally download and install Virtual Display Driver 25.7.23 from
+https://github.com/VirtualDrivers/Virtual-Display-Driver when the user chooses
+the virtual display setup action. Copyright (c) 2024 Virtual Display; MIT license.
+The driver is not bundled in the standard installer. Its pinned SHA256 and
+signature verification are in Install-VirtualDisplay.ps1. This optional action
+requires internet access and administrator approval, separately from setup.
+
 The full installation includes Mause, Microsoft Visual C++ v14 Runtime (x64), usbipd-win 5.3.0 and USBip 0.9.8.1 (usbip-win2 client). Select the compact installation to omit USB sharing drivers. Runtime and driver packages are shared system components and remain installed when Mause is removed.
 
 - Microsoft Visual C++ Runtime: Microsoft Corporation. The unmodified Microsoft redistributable is included; its Microsoft license terms apply. https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist

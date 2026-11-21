@@ -14,6 +14,30 @@ pub const STOP: u8 = 0;
 pub const START: u8 = 1;
 pub const DENIED: u8 = 2;
 pub const FAILED: u8 = 3;
+pub const EXTEND_ME: u8 = 4;
+pub const EXTEND_STOP: u8 = 5;
+pub const EXTEND_UNSUPPORTED: u8 = 6;
+
+pub const EXTEND_SIZES: [(u16, u16); 3] = [(1920, 1080), (2560, 1440), (3840, 2160)];
+
+#[cfg(target_os = "macos")]
+pub fn can_extend_here() -> bool {
+    crate::vdisplay::supported()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn can_extend_here() -> bool {
+    true
+}
+
+pub fn extend_size_for(width: u32, height: u32) -> (u16, u16) {
+    EXTEND_SIZES
+        .iter()
+        .rev()
+        .find(|(w, h)| u32::from(*w) <= width && u32::from(*h) <= height)
+        .copied()
+        .unwrap_or(EXTEND_SIZES[0])
+}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Opts {
@@ -394,9 +418,17 @@ pub(crate) fn send(
     let started = Instant::now();
     let mut encoder: Encoding = None;
     let mut h264_failed = false;
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    let (mut virtual_size, mut virtual_display) = (None, None::<crate::vdisplay::Lease>);
     while !stop.load(Ordering::Relaxed) {
         let t0 = Instant::now();
         let o = *opts.lock().unwrap();
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        if o.extend != virtual_size {
+            drop(virtual_display.take());
+            virtual_display = o.extend.map(crate::vdisplay::Lease::begin).transpose()?;
+            virtual_size = o.extend;
+        }
         let fps = if o.h264 && !h264_failed {
             stream_fps(o.fps)
         } else {
@@ -404,7 +436,16 @@ pub(crate) fn send(
         };
         crate::platform::capture_fps(fps);
         let tick = Duration::from_millis(1000 / fps.max(1) as u64);
-        let Some((mut cap, mon)) = crate::platform::capture_monitor(o.monitor as usize) else {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let monitor = match &virtual_display {
+            Some(display) => display
+                .monitor_index()
+                .ok_or_else(|| io::Error::other("Sanal ekran bağlantısı kesildi."))?,
+            None => o.monitor as usize,
+        };
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let monitor = o.monitor as usize;
+        let Some((mut cap, mon)) = crate::platform::capture_monitor(monitor) else {
             if crate::platform::screen_capture_pending() && started.elapsed() < FIRST_FRAME {
                 thread::sleep(Duration::from_millis(100));
                 continue;
@@ -551,6 +592,14 @@ pub(crate) fn shrink(c: &Capture, max_w: usize) -> (usize, usize, Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extended_display_matches_the_viewer_screen() {
+        assert_eq!(extend_size_for(1920, 1080), (1920, 1080));
+        assert_eq!(extend_size_for(2560, 1600), (2560, 1440));
+        assert_eq!(extend_size_for(3840, 2160), (3840, 2160));
+        assert_eq!(extend_size_for(1366, 768), (1920, 1080));
+    }
 
     #[test]
     fn codec_bayragi_eski_surumlerle_uyumlu() {

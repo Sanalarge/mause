@@ -23,10 +23,16 @@ Mause; aynı ağdaki bilgisayarları ve Android cihazları tek klavye ve fareyle
 | --- | --- |
 | Kesintisiz giriş | Klavye ve fareyi Windows, macOS, Linux ve Android cihazlarla paylaşır. |
 | Ekran yerleşimi | Cihazları konumlandırır, imleci ekran kenarından geçirerek geçiş yapar. |
+| Bilgisayara özel ayarlar | Bağlanan PC'yi kimliğinden tanır; kayıtlı yerleşimini ve paylaşım ayarlarını otomatik geri yükler. Aynı konumdaki PC'ler birlikte bağlanınca yan yana yerleştirilir. |
 | Güvenli eşleştirme | Bağlantıya güvenmeden önce iki cihazda aynı kodu onaylatır. |
 | Şifreli taşıma | Eşleşmiş cihaz trafiğini uçtan uca şifreler. |
 | Pano ve dosyalar | Metni, panodaki görselleri ve dosyaları eşleşmiş bilgisayarlar arasında taşır. |
 | Medya paylaşımı | Platform desteklediğinde ses, mikrofon ve ekran paylaşır. |
+| Ek monitör | Bir bilgisayarın masaüstünü başka bir bilgisayara ya da Android tablete genişletir. Windows isteğe bağlı sanal ekran sürücüsünü kullanır; macOS ve Linux Wayland ekranı kendisi oluşturur. |
+| USB paylaşımı | Başka bir bilgisayara takılı USB aygıtlarını kendi bilgisayarınızdan kullanmanızı sağlar. |
+| Kenar geçişi | İmleç kenara değdiği an geçer; isterseniz kenarda bekleyerek geçmeyi açabilirsiniz. Geçilen bilgisayar adını ve işletim sistemini gösterir. |
+| Cihaz durumu | İsteğe bağlı olarak bağlı cihazların işlemci, bellek, GPU, disk ve ağ kullanımını gösterir. |
+| Otomatik güncelleme | Masaüstü sürümleri açılışta GitHub Releases'ı denetler ve en yeni sürümü kurar. |
 | Yerel paketler | Masaüstünde Windows Setup, macOS uygulaması veya Linux paketi kullanılır; Android kaynaktan derlenir. |
 | Sistem teması | İşletim sisteminin açık veya koyu görünümünü izler. |
 
@@ -52,7 +58,7 @@ Release paketi glibc 2.35 veya üstünü hedefler ve PipeWire kullanır. İlk a�
 
 ### Android
 
-Mause şimdilik hazır Android APK'sı yayımlamaz. Android uygulamasını aşağıdaki adımlarla kaynak koddan derleyin, oluşan debug APK'yı kurun ve Mause erişilebilirlik hizmetiyle giriş izinlerini etkinleştirin. Android, ana bilgisayarın klavye ve faresiyle yönetilen cihazdır; Android ekranını bilgisayara yansıtmaz.
+Mause şimdilik hazır Android APK'sı yayımlamaz. Android uygulamasını aşağıdaki adımlarla kaynak koddan derleyin, oluşan debug APK'yı kurun ve Mause erişilebilirlik hizmetiyle giriş izinlerini etkinleştirin. Android, ana bilgisayarın klavye ve faresiyle yönetilir. İzin verdiğinizde ekranını, dosyalarını, sesini ve kameralarını bilgisayarla paylaşabilir ve bilgisayar için ek monitör olarak kullanılabilir.
 
 ## Cihazları eşleştirme
 
@@ -99,7 +105,7 @@ Apple Developer ID ve noter secrets değerleri isteğe bağlıdır; yoksa macOS 
 
 ## Katkıda bulunma
 
-Mause sade bir trunk-based akış kullanır: kalıcı tek dal `main` dalıdır. Dışarıdan katkılar yalnızca pull request ile kabul edilir. Kısa ömürlü bir `feature/*`, `fix/*`, `docs/*` veya `chore/*` dalı açıp pull request oluşturun. Güncel değişiklik üç bakımcının tamamı tarafından onaylandığında CI başlar; CI başarılı olduktan sonra squash merge yapılır. Ayrıntılar için [CONTRIBUTING.md](CONTRIBUTING.md) dosyasına bakın.
+Mause sade bir trunk-based akış kullanır: kalıcı tek dal `main` dalıdır. Dışarıdan katkılar yalnızca pull request ile kabul edilir. Kısa ömürlü bir `feature/*`, `fix/*`, `docs/*` veya `chore/*` dalı açıp pull request oluşturun. Güncel değişiklik proje sahibi `Sanalarge` hesabı tarafından onaylandığında CI başlar; CI başarılı olduktan sonra squash merge yapılır. Ayrıntılar için [CONTRIBUTING.md](CONTRIBUTING.md) dosyasına bakın.
 
 Güvenlik açıklarını herkese açık issue olarak bildirmeyin. [SECURITY.md](SECURITY.md) içindeki yolu kullanın.
 
