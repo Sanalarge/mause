@@ -237,17 +237,23 @@ fn connect(sh: &Shared) -> io::Result<Secure> {
         .get(&ip)
         .cloned()
         .ok_or_else(|| io::Error::other("oturum anahtarı yok"))?;
+    connect_to(sh, &ip, &secret)
+}
+
+pub(crate) fn connect_to(sh: &Shared, ip: &str, secret: &str) -> io::Result<Secure> {
+    #[cfg(not(test))]
+    let _ = sh;
     #[cfg(test)]
     let port = sh.test_transfer.port.load(Ordering::Relaxed);
     #[cfg(not(test))]
     let port = FT_PORT;
-    let addr = (ip.as_str(), port)
+    let addr = (ip, port)
         .to_socket_addrs()?
         .next()
         .ok_or_else(|| io::Error::other("adres"))?;
     let raw = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
     raw.set_nodelay(true).ok();
-    let s = net::handshake(raw, true, &secret)?;
+    let s = net::handshake(raw, true, secret)?;
     s.set_read_timeout(Some(Duration::from_secs(60)))?;
     s.set_write_timeout(Some(Duration::from_secs(60)))?;
     Ok(s)
@@ -572,6 +578,7 @@ fn receive(sh: Arc<Shared>, raw: TcpStream, secret: String) {
         .unwrap_or_default();
     let perms = sh.perms_for_ip(&ip);
     match &m {
+        crate::clipboard_sync::MAGIC => crate::clipboard_sync::receive(&sh, &ip, &mut s),
         MAGIC if perms.files_in => receive_file(sh, s, None),
         PUT if perms.files_in => receive_file(sh, s, Some(())),
         LIST if perms.files_in => {

@@ -2,6 +2,7 @@ package io.github.bytaymur.mause
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
@@ -15,6 +16,7 @@ import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     private val notificationPermission = registerForActivityResult(
@@ -64,6 +66,47 @@ class MainActivity : ComponentActivity() {
         if (uris.isNotEmpty()) AgentService.sendFiles(uris)
     }
 
+    private val clipboardImagePicker = registerForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri != null) AgentService.current?.sendClipboardImage(uri)
+    }
+
+    private val clipboardPreviewWorker = Executors.newSingleThreadExecutor()
+    private var previewRevision = 0L
+    private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
+        if (hasWindowFocus()) refreshClipboardImage()
+    }
+
+    private fun clipboardImageUri(): Uri? =
+        getSystemService(ClipboardManager::class.java).primaryClip
+            ?.takeIf { it.description.hasMimeType("image/*") && it.itemCount > 0 }
+            ?.getItemAt(0)?.uri
+
+    private fun refreshClipboardImage() {
+        val revision = ++previewRevision
+        val uri = clipboardImageUri()
+        if (AgentState.clipboardImage?.uri == uri) return
+        AgentState.clipboardImage = null
+        if (uri != null) {
+            clipboardPreviewWorker.execute {
+                val preview = runCatching { ClipboardImages.preview(this, uri) }.getOrNull()
+                runOnUiThread {
+                    if (revision == previewRevision) AgentState.clipboardImage = preview
+                }
+            }
+        }
+    }
+
+    private fun sendClipboardImage() {
+        val image = clipboardImageUri()
+        if (image == null) {
+            AgentState.note("Panoda görsel yok. Bir ekran görüntüsü seçebilirsiniz.")
+        } else {
+            AgentService.current?.sendClipboardImage(image)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         KeyboardInput.load(this)
@@ -100,6 +143,29 @@ class MainActivity : ComponentActivity() {
     private fun appVersion(): String =
         runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
 
+    override fun onStart() {
+        super.onStart()
+        getSystemService(ClipboardManager::class.java)
+            .addPrimaryClipChangedListener(clipboardListener)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) refreshClipboardImage()
+    }
+
+    override fun onStop() {
+        getSystemService(ClipboardManager::class.java)
+            .removePrimaryClipChangedListener(clipboardListener)
+        previewRevision++
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        clipboardPreviewWorker.shutdownNow()
+        super.onDestroy()
+    }
+
     override fun onResume() {
         super.onResume()
         refreshCapabilities()
@@ -107,6 +173,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun shareActions() = ShareActions(
+        onClipboard = { change { AgentState.clipboardAllowed = it } },
+        onSendClipboard = ::sendClipboardImage,
+        onPickClipboardImage = { clipboardImagePicker.launch("image/*") },
         onFiles = { change { AgentState.filesAllowed = it } },
         onStorage = ::requestStorage,
         onSendFiles = { filePicker.launch("*/*") },

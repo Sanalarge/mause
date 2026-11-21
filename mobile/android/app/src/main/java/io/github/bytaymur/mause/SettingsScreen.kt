@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.ScreenShare
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Keyboard
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.sp
 enum class SettingsSection(val title: String, val icon: ImageVector) {
     Pointer("Fare ve dokunma", Icons.Rounded.Mouse),
     Keyboard("Klavye", Icons.Rounded.Keyboard),
+    Clipboard("Pano", Icons.Rounded.ContentPaste),
     Files("Dosyalar", Icons.Rounded.Folder),
     Audio("Ses", Icons.AutoMirrored.Rounded.VolumeUp),
     Screen("Ekran paylaşımı", Icons.AutoMirrored.Rounded.ScreenShare),
@@ -48,6 +50,7 @@ enum class SettingsSection(val title: String, val icon: ImageVector) {
 
 private val Permissions = listOf(SettingsSection.Pointer, SettingsSection.Keyboard)
 private val Sharing = listOf(
+    SettingsSection.Clipboard,
     SettingsSection.Files,
     SettingsSection.Audio,
     SettingsSection.Screen,
@@ -68,6 +71,7 @@ fun sectionStatus(section: SettingsSection, version: String): SectionStatus = wh
     SettingsSection.Keyboard ->
         if (AgentState.accessibilityReady) SectionStatus("Hazır · ${AgentState.keyboardLayout.title}", MauseColors.Ok)
         else SectionStatus("Fare izni gerekli", MauseColors.Accent)
+    SettingsSection.Clipboard -> onOff(AgentState.clipboardAllowed)
     SettingsSection.Files -> onOff(AgentState.filesAllowed)
     SettingsSection.Audio -> onOff(AgentState.shareAudio || AgentState.shareMic || AgentState.playPcAudio)
     SettingsSection.Screen -> when {
@@ -112,6 +116,7 @@ fun SettingsDetail(
         when (section) {
             SettingsSection.Pointer -> PointerPanel(system)
             SettingsSection.Keyboard -> KeyboardPanel(system)
+            SettingsSection.Clipboard -> ClipboardPanel(share)
             SettingsSection.Files -> FilesPanel(share)
             SettingsSection.Audio -> AudioPanel(share)
             SettingsSection.Screen -> ScreenPanel(share)

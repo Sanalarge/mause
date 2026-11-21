@@ -18,6 +18,7 @@ ab_glyph = "0.2.32"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 eframe = "0.37.0"
 getrandom = "0.4.3"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 jpeg-decoder = { version = "0.3.2", default-features = false }
 jpeg-encoder = { version = "0.7.1", default-features = false }
 openh264 = "0.9.9"
@@ -62,7 +63,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSString"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
-arboard = { version = "3.7.0", default-features = false }
+arboard = { version = "3.7.0", default-features = false, features = ["image-data"] }
 cpal = "0.18"
 tray-icon = "0.26.1"
 

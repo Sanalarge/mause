@@ -13,6 +13,16 @@ pub fn text_snapshot() -> Option<String> {
     None
 }
 
-pub fn set_text(_: &str) {}
+pub fn set_text(_: &str) -> bool {
+    false
+}
+
+pub fn image_snapshot() -> Option<Vec<u8>> {
+    None
+}
+
+pub fn set_image(_: Vec<u8>, _: image::RgbaImage) -> bool {
+    false
+}
 
 pub fn carry(_: Arc<crate::core::Shared>) {}

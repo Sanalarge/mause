@@ -3,6 +3,7 @@ package io.github.bytaymur.mause
 import android.content.Context
 
 object SharePrefs {
+    private const val CLIPBOARD = "clipboard_allowed"
     private const val FILES = "files_allowed"
     private const val AUDIO = "share_audio"
     private const val MIC = "share_mic"
@@ -22,6 +23,7 @@ object SharePrefs {
 
     fun load(context: Context) {
         val prefs = context.getSharedPreferences("mause", Context.MODE_PRIVATE)
+        AgentState.clipboardAllowed = prefs.getBoolean(CLIPBOARD, true)
         AgentState.filesAllowed = prefs.getBoolean(FILES, false)
         AgentState.shareAudio = prefs.getBoolean(AUDIO, false)
         AgentState.shareMic = prefs.getBoolean(MIC, false)
@@ -34,6 +36,7 @@ object SharePrefs {
 
     fun save(context: Context) {
         context.getSharedPreferences("mause", Context.MODE_PRIVATE).edit()
+            .putBoolean(CLIPBOARD, AgentState.clipboardAllowed)
             .putBoolean(FILES, AgentState.filesAllowed)
             .putBoolean(AUDIO, AgentState.shareAudio)
             .putBoolean(MIC, AgentState.shareMic)
@@ -46,7 +49,8 @@ object SharePrefs {
     }
 
     fun bits(): Int {
-        var bits = CONTROL_IN or CLIP_IN or SHARE_TEXT
+        var bits = CONTROL_IN
+        if (AgentState.clipboardAllowed) bits = bits or CLIP_IN or SHARE_TEXT
         if (AgentState.shareAudio && AgentState.captureReady && AgentState.micReady) bits = bits or AUDIO_OUT
         if (AgentState.shareMic && AgentState.micReady) bits = bits or MIC_OUT
         if (AgentState.filesAllowed) bits = bits or FILES_IN

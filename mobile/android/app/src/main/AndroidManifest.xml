@@ -44,6 +44,16 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="false" />
 
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.clipboard"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/clipboard_paths" />
+        </provider>
+
         <service
             android:name=".AgentService"
             android:exported="false"

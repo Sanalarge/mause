@@ -1,11 +1,12 @@
+mod clipboard;
 mod files;
 mod media;
 
 use jni::objects::{GlobalRef, JByteArray, JClass, JIntArray, JObject, JString, JValue};
 use jni::sys::{jboolean, jint, jlong};
 use jni::{JNIEnv, JavaVM};
-use media::{AudioIn, AudioOut};
 use mause_protocol::{self as net, Frame, Secure};
+use media::{AudioIn, AudioOut};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, ErrorKind, Write};
@@ -51,6 +52,7 @@ struct Link {
     ip: String,
     secret: String,
     hash: [u8; 32],
+    clipboard_images: bool,
 }
 
 #[derive(Clone)]
@@ -548,7 +550,8 @@ fn control_session(
         | SUPPORTS_PREFS
         | SUPPORTS_SCREEN
         | SUPPORTS_SCREEN2
-        | SUPPORTS_HARDWARE;
+        | SUPPORTS_HARDWARE
+        | clipboard::SUPPORTED;
     net::write_frame(
         &mut secure,
         &Frame::Size(
@@ -562,6 +565,7 @@ fn control_session(
         ip,
         secret,
         hash: secure.hash,
+        clipboard_images: desktop_flags & clipboard::SUPPORTED != 0,
     });
     *WRITER.lock().unwrap() = Some(secure.try_clone()?);
     callbacks.connected(true);
@@ -586,7 +590,7 @@ fn read_session(
             Frame::Enter(position, side) => callbacks.enter(position, side),
             Frame::Events(events) => callbacks.input(&events),
             Frame::Release | Frame::Reclaim => callbacks.release(),
-            Frame::ClipText(text) => callbacks.clipboard(&text),
+            Frame::ClipText(text) if clipboard::can_receive() => callbacks.clipboard(&text),
             Frame::Ping => send(&Frame::Ping)?,
             Frame::SetPref(pref, on) => set_pref(pref, on, callbacks)?,
             Frame::AudioReq(kind, on) if kind < 2 => audio_request(kind, on, callbacks),
@@ -825,9 +829,6 @@ fn file_connection(stream: TcpStream, ip: String, callbacks: &Callbacks) {
     let Some(link) = LINK.lock().unwrap().clone().filter(|link| link.ip == ip) else {
         return;
     };
-    let Some(roots) = ROOTS.lock().unwrap().clone() else {
-        return;
-    };
     stream.set_nonblocking(false).ok();
     stream.set_nodelay(true).ok();
     let Ok(secure) = net::handshake(stream, false, &link.secret) else {
@@ -838,7 +839,31 @@ fn file_connection(stream: TcpStream, ip: String, callbacks: &Callbacks) {
     let allowed = PREFS.load(Ordering::Relaxed) & PREF_FILES_IN != 0;
     let notify = |text: &str| callbacks.activity(text);
     let mut secure = secure;
-    let _ = files::serve_connection(&mut secure, &roots, allowed, &notify);
+    use std::io::Read;
+    let mut magic = [0; 4];
+    if secure.read_exact(&mut magic).is_err() {
+        return;
+    }
+    if &magic == clipboard::MAGIC {
+        let _ = clipboard::receive(&mut secure, &link, callbacks);
+    } else {
+        let roots = ROOTS.lock().unwrap().clone();
+        if let Some(roots) = roots {
+            let _ = files::serve_connection(&mut secure, magic, &roots, allowed, &notify);
+        }
+    }
+}
+
+fn connect_transfer(link: &Link) -> io::Result<Secure> {
+    let address: SocketAddr = format!("{}:{}", link.ip, files::PORT)
+        .parse()
+        .map_err(io::Error::other)?;
+    let stream = TcpStream::connect_timeout(&address, Duration::from_secs(3))?;
+    stream.set_nodelay(true).ok();
+    let secure = net::handshake(stream, true, &link.secret)?;
+    secure.set_read_timeout(Some(Duration::from_secs(60)))?;
+    secure.set_write_timeout(Some(Duration::from_secs(60)))?;
+    Ok(secure)
 }
 
 fn send_file(file: File, name: String, size: u64, callbacks: Arc<Callbacks>) {
@@ -848,14 +873,7 @@ fn send_file(file: File, name: String, size: u64, callbacks: Arc<Callbacks>) {
             .unwrap()
             .clone()
             .ok_or_else(|| io::Error::other("bilgisayarla bağlantı yok"))?;
-        let address: SocketAddr = format!("{}:{}", link.ip, files::PORT)
-            .parse()
-            .map_err(io::Error::other)?;
-        let stream = TcpStream::connect_timeout(&address, Duration::from_secs(3))?;
-        stream.set_nodelay(true).ok();
-        let mut secure = net::handshake(stream, true, &link.secret)?;
-        secure.set_read_timeout(Some(Duration::from_secs(60)))?;
-        secure.set_write_timeout(Some(Duration::from_secs(60)))?;
+        let mut secure = connect_transfer(&link)?;
         let mut source = file;
         files::send(&mut secure, &name, size, &mut source)
     })();

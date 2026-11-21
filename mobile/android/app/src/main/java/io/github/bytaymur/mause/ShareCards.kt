@@ -1,10 +1,12 @@
 package io.github.bytaymur.mause
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -19,11 +21,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 class ShareActions(
+    val onClipboard: (Boolean) -> Unit,
+    val onSendClipboard: () -> Unit,
+    val onPickClipboardImage: () -> Unit,
     val onFiles: (Boolean) -> Unit,
     val onStorage: () -> Unit,
     val onSendFiles: () -> Unit,
@@ -178,6 +184,24 @@ fun RemotePanel(actions: ShareActions) {
             actions.onRemotePrefs,
             detail = "Bilgisayarda bir akış tuşuna basınca burada da aynı akış açılır ya da kapanır. Kapalıysa bilgisayar yalnız kapatabilir.",
         )
+    }
+}
+
+@Composable
+fun ClipboardPanel(actions: ShareActions) {
+    PanelCard {
+        SwitchRow("Pano paylaşımı", AgentState.clipboardAllowed, actions.onClipboard)
+        AgentState.clipboardImage?.let { preview ->
+            Image(
+                bitmap = preview.bitmap.asImageBitmap(),
+                contentDescription = "Panodaki görsel",
+                modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp),
+            )
+        }
+        val canSend = AgentState.connected && AgentState.clipboardAllowed && !AgentState.clipboardSending
+        SecondaryButton("Panodaki görseli gönder", actions.onSendClipboard, enabled = canSend)
+        SecondaryButton("Ekran görüntüsü seç ve gönder", actions.onPickClipboardImage, enabled = canSend)
+        if (AgentState.clipboardSending) Note("Görsel gönderiliyor…")
     }
 }
 

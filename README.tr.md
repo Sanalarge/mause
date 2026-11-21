@@ -26,7 +26,7 @@ Mause; aynı ağdaki bilgisayarları ve Android cihazları tek klavye ve fareyle
 | Bilgisayara özel ayarlar | Bağlanan PC'yi kimliğinden tanır; kayıtlı yerleşimini ve paylaşım ayarlarını otomatik geri yükler. Aynı konumdaki PC'ler birlikte bağlanınca yan yana yerleştirilir. |
 | Güvenli eşleştirme | Bağlantıya güvenmeden önce iki cihazda aynı kodu onaylatır. |
 | Şifreli taşıma | Eşleşmiş cihaz trafiğini uçtan uca şifreler. |
-| Pano ve dosyalar | Metin ve dosyaları eşleşmiş bilgisayarlar arasında taşır. |
+| Pano ve dosyalar | Metni, panodaki görselleri ve dosyaları eşleşmiş bilgisayarlar arasında taşır. |
 | Medya paylaşımı | Platform desteklediğinde ses, mikrofon ve ekran paylaşır. |
 | Ek monitör | Bir bilgisayarın masaüstünü başka bir bilgisayara ya da Android tablete genişletir. Windows isteğe bağlı sanal ekran sürücüsünü kullanır; macOS ve Linux Wayland ekranı kendisi oluşturur. |
 | USB paylaşımı | Başka bir bilgisayara takılı USB aygıtlarını kendi bilgisayarınızdan kullanmanızı sağlar. |
@@ -67,6 +67,10 @@ Mause şimdilik hazır Android APK'sı yayımlamaz. Android uygulamasını aşa�
 3. Görünen cihazı seçin veya IP adresini yazın.
 4. Eşleştirme kodunun iki ekranda aynı olduğunu doğrulayın.
 5. Cihazı ekran yerleşimine koyun ve imleci ayarlanan kenardan geçirin.
+
+Ekran görüntüsünü paylaşmak için sistem panosuna kopyalayın, imleci eşleşmiş bilgisayara geçirin ve görselleri destekleyen bir uygulamaya yapıştırın. Görsel paylaşımı metinle aynı pano ayarını kullanır ve iki cihazda da güncel Mause gerektirir. Masaüstünde görseli **Ayarlar → Pano ile paylaşım** bölümünde görebilirsiniz. Linux'ta panodaki görseller Wayland üzerinden aktarılır.
+
+Android'de gelen görseli görmek veya eşleşmiş bilgisayara görsel göndermek için **Pano** kartını açın. Panoya kopyalanmış bir görsel için **Panodaki görseli gönder**, telefona kaydedilmiş bir ekran görüntüsü için **Ekran görüntüsü seç ve gönder** düğmesini kullanın.
 
 ## Kaynaktan derleme
 
